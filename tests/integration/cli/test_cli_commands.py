@@ -683,4 +683,6 @@ def test_load_credentials_displays_kuzudb_backend(monkeypatch, tmp_path):
         with patch("codegraphcontext.cli.main.console", Console(file=output, force_terminal=False)):
             _load_credentials()
 
-        assert "Using database: KùzuDB" in output.getvalue()
+        lowered = output.getvalue().lower()
+        assert "using database: kuzudb" in lowered
+        assert "source:" in lowered
