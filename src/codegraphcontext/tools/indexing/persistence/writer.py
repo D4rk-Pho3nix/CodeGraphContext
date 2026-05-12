@@ -148,6 +148,7 @@ class GraphWriter:
                 batch: List[Dict[str, Any]] = []
                 for item in item_list:
                     row = dict(item)
+                    row["path"] = file_path_str
                     if label == "Function" and "cyclomatic_complexity" not in row:
                         row["cyclomatic_complexity"] = 1
                     batch.append(sanitize_props(row))
@@ -450,53 +451,73 @@ class GraphWriter:
                 file_path=file_path_str,
             )
 
-            def write_function_call_groups(
+    def write_function_call_groups(
         self,
-        resolved_calls: List[Dict],
+        fn_to_fn: List[Dict],
+        fn_to_class: List[Dict],
+        fn_to_interface: List[Dict],
+        file_to_fn: List[Dict],
+        file_to_class: List[Dict],
+        file_to_interface: List[Dict],
     ) -> None:
         batch_size = 1000
-        # Generic query matching ANY valid code element label for caller and callee
-        q_generic = """
-            UNWIND $batch AS row
-            MATCH (caller {name: row.caller_name, path: row.caller_file_path, line_number: row.caller_line_number})
-            WHERE caller:Function OR caller:Class OR caller:Interface OR caller:Trait OR caller:Struct OR caller:Enum OR caller:Record OR caller:Union
-            MATCH (called {name: row.called_name, path: row.called_file_path})
-            WHERE called:Function OR called:Class OR called:Interface OR called:Trait OR called:Struct OR called:Enum OR called:Record OR caller:Union
-            MERGE (caller)-[c:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
-            SET c.confidence = row.confidence, c.resolution_tier = row.resolution_tier,
-                c.confidence_label = row.confidence_label
-        """
-        q_file_to_any = """
-            UNWIND $batch AS row
-            MATCH (caller:File {path: row.caller_file_path})
-            MATCH (called {name: row.called_name, path: row.called_file_path})
-            WHERE called:Function OR called:Class OR called:Interface OR called:Trait OR called:Struct OR called:Enum OR called:Record OR called:Union
-            MERGE (caller)-[c:CALLS {line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}]->(called)
-            SET c.confidence = row.confidence, c.resolution_tier = row.resolution_tier,
-                c.confidence_label = row.confidence_label
-        """
 
-        file_calls = [c for c in resolved_calls if c["type"] == "file"]
-        code_calls = [c for c in resolved_calls if c["type"] == "function"]
+        # KuzuDB requires deterministic node labels for relationship creation.
+        # We use specific queries for each bucket to satisfy the binder.
+        queries = [
+            (fn_to_fn, "Function", "Function"),
+            (fn_to_class, "Function", "Class"),
+            (fn_to_interface, "Function", "Interface"),
+            (file_to_fn, "File", "Function"),
+            (file_to_class, "File", "Class"),
+            (file_to_interface, "File", "Interface"),
+        ]
 
         with self.driver.session() as session:
-            # Write code-to-code calls
-            if code_calls:
-                t0 = time.time()
-                for i in range(0, len(code_calls), batch_size):
-                    batch = code_calls[i : i + batch_size]
-                    session.run(q_generic, batch=batch)
-                info_logger(f"[CALLS] Code-to-Code: {len(code_calls)} edges written in {time.time()-t0:.1f}s")
+            for batch_data, caller_label, called_label in queries:
+                if not batch_data:
+                    continue
+                
+                # Ensure all rows have the required keys with correct types for KuzuDB
+                for row in batch_data:
+                    if "confidence" not in row or row["confidence"] is None:
+                        row["confidence"] = 0.0
+                    if "resolution_tier" not in row or row["resolution_tier"] is None:
+                        row["resolution_tier"] = -1
+                    if "confidence_label" not in row or row["confidence_label"] is None:
+                        row["confidence_label"] = "EXTRACTED"
+                    if "called_line_number" not in row:
+                        row["called_line_number"] = -1
 
-            # Write file-to-code calls
-            if file_calls:
-                t0 = time.time()
-                for i in range(0, len(file_calls), batch_size):
-                    batch = file_calls[i : i + batch_size]
-                    session.run(q_file_to_any, batch=batch)
-                info_logger(f"[CALLS] File-to-Code: {len(file_calls)} edges written in {time.time()-t0:.1f}s")
+                # Choose query pattern based on whether caller is a File
+                if caller_label == "File":
+                    q = f"""
+                        UNWIND $batch AS row
+                        MATCH (caller:File {{path: row.caller_file_path}})
+                        MATCH (called:{called_label} {{name: row.called_name, path: row.called_file_path}})
+                        WHERE row.called_line_number < 0 OR called.line_number = row.called_line_number
+                        MERGE (caller)-[c:CALLS {{line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}}]->(called)
+                        SET c.confidence = row.confidence, c.resolution_tier = row.resolution_tier,
+                            c.confidence_label = row.confidence_label
+                    """
+                else:
+                    q = f"""
+                        UNWIND $batch AS row
+                        MATCH (caller:{caller_label} {{name: row.caller_name, path: row.caller_file_path, line_number: row.caller_line_number}})
+                        MATCH (called:{called_label} {{name: row.called_name, path: row.called_file_path}})
+                        WHERE row.called_line_number < 0 OR called.line_number = row.called_line_number
+                        MERGE (caller)-[c:CALLS {{line_number: row.line_number, args: row.args, full_call_name: row.full_call_name}}]->(called)
+                        SET c.confidence = row.confidence, c.resolution_tier = row.resolution_tier,
+                            c.confidence_label = row.confidence_label
+                    """
 
-        info_logger(f"[CALLS] All complete: {len(resolved_calls)} CALLS relationships processed.")
+                t0 = time.time()
+                for i in range(0, len(batch_data), batch_size):
+                    batch = batch_data[i : i + batch_size]
+                    session.run(q, batch=batch)
+                info_logger(f"[CALLS] {caller_label}-to-{called_label}: {len(batch_data)} edges written in {time.time()-t0:.1f}s")
+
+        info_logger("[CALLS] All relationships processed.")
 
     def _create_csharp_inheritance_and_interfaces(
         self, session: Any, file_data: Dict[str, Any], imports_map: dict
