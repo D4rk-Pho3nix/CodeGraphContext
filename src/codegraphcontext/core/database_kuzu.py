@@ -132,9 +132,21 @@ class KuzuDBManager:
             # or the rel table creation will fail silently, leading to runtime
             # "Binder exception: Table CONTAINS does not exist".
             ("CONTAINS", "FROM File TO Function, FROM File TO Class, FROM File TO Variable, FROM File TO Trait, FROM File TO Interface, FROM `Macro` TO `Macro`, FROM File TO `Macro`, FROM File TO Struct, FROM File TO Enum, FROM File TO `Union`, FROM File TO Annotation, FROM File TO Record, FROM File TO `Property`, FROM Repository TO Directory, FROM Directory TO Directory, FROM Directory TO File, FROM Repository TO File, FROM Class TO Function, FROM Function TO Function", True),
-            ("CALLS", "FROM Function TO Function, FROM Function TO Class, FROM File TO Function, FROM File TO Class, FROM Class TO Function, FROM Class TO Class, line_number INT64, args STRING[], full_call_name STRING, confidence DOUBLE, resolution_tier INT64, confidence_label STRING, source STRING, resolution_method STRING, called_name STRING", True),
+            ("CALLS", """
+                FROM Function TO Function, FROM Function TO Class, FROM Function TO Interface, FROM Function TO Trait, FROM Function TO Struct, FROM Function TO Enum, FROM Function TO `Record`, FROM Function TO `Union`,
+                FROM Class TO Function, FROM Class TO Class, FROM Class TO Interface, FROM Class TO Trait, FROM Class TO Struct, FROM Class TO Enum, FROM Class TO `Record`, FROM Class TO `Union`,
+                FROM Interface TO Function, FROM Interface TO Class, FROM Interface TO Interface,
+                FROM File TO Function, FROM File TO Class, FROM File TO Interface, FROM File TO Trait, FROM File TO Struct, FROM File TO Enum, FROM File TO `Record`, FROM File TO `Union`,
+                line_number INT64, args STRING[], full_call_name STRING, confidence DOUBLE, resolution_tier INT64, confidence_label STRING, source STRING, resolution_method STRING, called_name STRING
+            """, True),
             ("IMPORTS", "FROM File TO Module, alias STRING, full_import_name STRING, imported_name STRING, line_number INT64", False),
-            ("INHERITS", "FROM Class TO Class, FROM Record TO Record, FROM Interface TO Interface, confidence_label STRING", True),
+            ("INHERITS", """
+                FROM Class TO Class, FROM Class TO Interface, FROM Class TO Trait,
+                FROM `Record` TO `Record`, FROM `Record` TO Interface,
+                FROM Interface TO Interface, FROM Interface TO Trait,
+                FROM Struct TO Interface, FROM Struct TO Trait,
+                confidence_label STRING
+            """, True),
             ("HAS_PARAMETER", "FROM Function TO Parameter", False),
             ("INCLUDES", "FROM Class TO Module", False),
             ("IMPLEMENTS", "FROM Class TO Interface, FROM Struct TO Interface, FROM Record TO Interface", True),
@@ -704,6 +716,38 @@ class KuzuSessionWrapper:
         labels_to_escape = ['Macro', 'Union', 'Property', 'CONTAINS', 'CALLS'] # Only critical keywords
         for label in labels_to_escape:
             query = re.sub(rf':{label}\b', f':`{label}`', query)
+
+        # Translate (n:Label1 OR n:Label2 ...) to label(n) IN ['Label1', 'Label2', ...]
+        def poly_replacer(match):
+            full_match = match.group(0)
+            var_name = match.group(1)
+            # Find all labels associated with this variable in the OR chain
+            labels = re.findall(rf'{var_name}:([a-zA-Z0-9_`]+)', full_match)
+            # Strip backticks from labels
+            labels = [l.strip('`') for l in labels]
+            return f"label({var_name}) IN {json.dumps(labels)}"
+        
+        # Regex to match (n:Label1 OR n:Label2 OR n:Label3)
+        query = re.sub(r'\((\w+):[a-zA-Z0-9_`]+(?:\s+OR\s+\1:[a-zA-Z0-9_`]+)+\)', poly_replacer, query)
+        
+        # Translate single WHERE n:Label to label(n) = 'Label'
+        # This is more complex because we don't want to match MATCH/MERGE
+        # For now, we only target where it appears after WHERE or AND/OR
+        def single_label_replacer(match):
+            prefix = match.group(1)
+            var_name = match.group(2)
+            label = match.group(3).strip('`')
+            return f"{prefix}label({var_name}) = '{label}'"
+            
+        query = re.sub(r'(WHERE\s+|AND\s+|OR\s+|WHEN\s+)(\w+):([a-zA-Z0-9_`]+)', single_label_replacer, query, flags=re.IGNORECASE)
+
+        # Handle NOT n:Label → NOT label(n) = 'Label'
+        def not_label_replacer(match):
+            prefix = match.group(1)
+            var_name = match.group(2)
+            label_name = match.group(3).strip('`')
+            return f"{prefix}NOT label({var_name}) = '{label_name}'"
+        query = re.sub(r'(WHERE\s+|AND\s+|OR\s+)NOT\s+(\w+):([a-zA-Z0-9_`]+)', not_label_replacer, query, flags=re.IGNORECASE)
 
         # 4. Polymorphic matches and label access
         query = query.replace("labels(n)[0]", "label(n)")
