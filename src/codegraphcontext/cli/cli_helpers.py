@@ -868,3 +868,39 @@ def list_watching_helper():
     console.print(f"\n[cyan]To see watched directories in MCP mode:[/cyan]")
     console.print(f"  1. Start the MCP server: cgc mcp start")
     console.print(f"  2. Use the 'list_watched_paths' MCP tool from your IDE")
+
+
+def setup_scip_helper() -> None:
+    """Diagnostic and setup helper for SCIP indexers."""
+    from ..tools.scip_indexer import EXTENSION_TO_SCIP
+    import shutil
+    
+    console.print("[bold cyan]🔍 Checking SCIP Indexer Availability...[/bold cyan]\n")
+    
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Language", style="cyan")
+    table.add_column("Binary", style="yellow")
+    table.add_column("Status", style="green")
+    table.add_column("Install Hint", style="dim")
+    
+    langs = {}
+    for ext, (lang, binary, hint, docker) in EXTENSION_TO_SCIP.items():
+        if lang not in langs:
+            langs[lang] = (binary, hint, docker)
+            
+    for lang, (binary, hint, docker) in sorted(langs.items()):
+        is_installed = shutil.which(binary) is not None
+        status = "[green]✓ Installed[/green]" if is_installed else "[red]✗ Not Found[/red]"
+        table.add_row(lang, binary, status, hint)
+        
+    console.print(table)
+    
+    # Check Docker
+    has_docker = shutil.which("docker") is not None
+    if has_docker:
+        console.print("\n[green]✓ Docker is available (Auto-fallback enabled)[/green]")
+    else:
+        console.print("\n[yellow]⚠ Docker not found. Local binaries are required for SCIP.[/yellow]")
+
+    console.print("\n[dim]To enable SCIP indexing, run:[/dim]")
+    console.print("[bold white]cgc config set SCIP_INDEXER true[/bold white]")

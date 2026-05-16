@@ -41,6 +41,7 @@ from .cli_helpers import (
     watch_helper,
     unwatch_helper,
     list_watching_helper,
+    setup_scip_helper,
 )
 
 # Set the log level for the noisy neo4j, asyncio, and urllib3 loggers to keep the output clean.
@@ -1098,6 +1099,16 @@ def stats(
     if path:
         path = str(Path(path).resolve())
     stats_helper(path, context)
+
+@app.command("setup-scip")
+def setup_scip():
+    """
+    Check availability of SCIP indexers and provide installation hints.
+    
+    This command audits your system for SCIP binaries (like scip-python, scip-go)
+    and checks if Docker is available for fallback indexing.
+    """
+    setup_scip_helper()
 
 @app.command()
 def delete(

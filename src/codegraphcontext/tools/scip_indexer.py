@@ -73,6 +73,12 @@ EXTENSION_TO_SCIP: Dict[str, Tuple[str, str, str, str]] = {
     ".php":   ("php",        "scip-php",        "composer global require davidrjenni/scip-php", "davidrjenni/scip-php"),
     ".rb":    ("ruby",       "scip-ruby",       "gem install scip-ruby", ""),
     ".swift": ("swift",      "scip-swift",      "brew install scip-swift", ""),
+    ".ex":    ("elixir",     "scip-ctags",      "go install github.com/sourcegraph/scip-ctags/cmd/scip-ctags@latest", "sourcegraph/scip-ctags"),
+    ".exs":   ("elixir",     "scip-ctags",      "go install github.com/sourcegraph/scip-ctags/cmd/scip-ctags@latest", "sourcegraph/scip-ctags"),
+    ".hs":    ("haskell",    "scip-ctags",      "go install github.com/sourcegraph/scip-ctags/cmd/scip-ctags@latest", "sourcegraph/scip-ctags"),
+    ".lua":   ("lua",        "scip-ctags",      "go install github.com/sourcegraph/scip-ctags/cmd/scip-ctags@latest", "sourcegraph/scip-ctags"),
+    ".pl":    ("perl",       "scip-ctags",      "go install github.com/sourcegraph/scip-ctags/cmd/scip-ctags@latest", "sourcegraph/scip-ctags"),
+    ".pm":    ("perl",       "scip-ctags",      "go install github.com/sourcegraph/scip-ctags/cmd/scip-ctags@latest", "sourcegraph/scip-ctags"),
 }
 
 
@@ -426,6 +432,9 @@ class ScipIndexer:
 
         elif lang == "php":
             return [binary, "index", "--project-root", str(project_path), "--output", out]
+
+        elif binary == "scip-ctags":
+            return [binary, "index", "--output", out]
 
         return None
 
