@@ -277,11 +277,24 @@ class GraphWriter:
                     if key not in seen_params:
                         seen_params.add(key)
                         unique_params.append(p)
+                # Phase 1: MERGE Parameter nodes first.
+                # Splitting into two queries prevents FalkorDB's UNWIND
+                # snapshot isolation from creating duplicate Parameter nodes
+                # when multiple rows reference the same parameter identity.
+                session.run(
+                    """
+                    UNWIND $batch AS row
+                    MERGE (p:Parameter {name: row.arg_name, path: $file_path, function_line_number: row.line_number})
+                """,
+                    batch=unique_params,
+                    file_path=file_path_str,
+                )
+                # Phase 2: Now MATCH both sides and MERGE the relationship.
                 session.run(
                     """
                     UNWIND $batch AS row
                     MATCH (fn:Function {name: row.func_name, path: $file_path, line_number: row.line_number})
-                    MERGE (p:Parameter {name: row.arg_name, path: $file_path, function_line_number: row.line_number})
+                    MATCH (p:Parameter {name: row.arg_name, path: $file_path, function_line_number: row.line_number})
                     MERGE (fn)-[:HAS_PARAMETER]->(p)
                 """,
                     batch=unique_params,
@@ -561,6 +574,29 @@ class GraphWriter:
 
                 if not sanitized_batch:
                     continue
+
+                # Deduplicate CALLS batch to ensure consistent counts across
+                # all backends.  FalkorDB's MERGE within an UNWIND batch does
+                # not see edges created by earlier rows in the same snapshot,
+                # leading to duplicate edges.  Dedup at the application level
+                # guarantees identical input to every backend.
+                seen_calls: set = set()
+                unique_calls: List[Dict[str, Any]] = []
+                for row in sanitized_batch:
+                    dedup_key = (
+                        row.get("caller_name", ""),
+                        row.get("caller_file_path", ""),
+                        row.get("caller_line_number", 0),
+                        row.get("called_name", ""),
+                        row.get("called_file_path", ""),
+                        row.get("line_number", 0),
+                        row.get("full_call_name", ""),
+                        row.get("args_key", ""),
+                    )
+                    if dedup_key not in seen_calls:
+                        seen_calls.add(dedup_key)
+                        unique_calls.append(row)
+                sanitized_batch = unique_calls
 
                 # Define which labels have a 'context' property in the schema
                 labels_with_context = {"Function", "Variable"}
