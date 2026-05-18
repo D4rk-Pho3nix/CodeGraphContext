@@ -686,3 +686,43 @@ def test_load_credentials_displays_kuzudb_backend(monkeypatch, tmp_path):
         lowered = output.getvalue().lower()
         assert "using database: kuzudb" in lowered
         assert "source:" in lowered
+
+
+def test_load_credentials_normalizes_tilde_paths_from_mcp_json(monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_main.config_manager, "ensure_config_dir", lambda *_args, **_kwargs: None)
+
+    mcp_data = {
+        "mcpServers": {
+            "CodeGraphContext": {
+                "env": {
+                    "DEFAULT_DATABASE": "falkordb",
+                    "FALKORDB_PATH": "~/.codegraphcontext/global/db/falkordb",
+                    "FALKORDB_SOCKET_PATH": "~/.codegraphcontext/global/db/falkordb.sock",
+                    "DEBUG_LOG_PATH": "~/mcp_debug.log",
+                    "LOG_FILE_PATH": "~/.codegraphcontext/logs/cgc.log",
+                }
+            }
+        }
+    }
+    (tmp_path / "mcp.json").write_text(str(mcp_data).replace("'", '"'), encoding="utf-8")
+
+    clean_env = {
+        k: v for k, v in os.environ.items()
+        if k not in {
+            "DEFAULT_DATABASE",
+            "CGC_RUNTIME_DB_TYPE",
+            "FALKORDB_PATH",
+            "FALKORDB_SOCKET_PATH",
+            "DEBUG_LOG_PATH",
+            "LOG_FILE_PATH",
+        }
+    }
+    with patch.dict(os.environ, clean_env, clear=True):
+        _load_credentials()
+
+        assert os.environ["FALKORDB_PATH"] == str((tmp_path / ".codegraphcontext" / "global" / "db" / "falkordb").resolve())
+        assert os.environ["FALKORDB_SOCKET_PATH"] == str((tmp_path / ".codegraphcontext" / "global" / "db" / "falkordb.sock").resolve())
+        assert os.environ["DEBUG_LOG_PATH"] == str((tmp_path / "mcp_debug.log").resolve())
+        assert os.environ["LOG_FILE_PATH"] == str((tmp_path / ".codegraphcontext" / "logs" / "cgc.log").resolve())

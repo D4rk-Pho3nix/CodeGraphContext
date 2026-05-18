@@ -171,6 +171,21 @@ coverage/
 """
 
 
+def normalize_config_path(value: str, *, absolute: bool = False, base_dir: Optional[Path] = None) -> str:
+    """Normalize config path values.
+
+    - Expands ``~`` and environment variables.
+    - Optionally resolves to an absolute path.
+    """
+    expanded = os.path.expandvars(os.path.expanduser(str(value)))
+    path_obj = Path(expanded)
+    if absolute and not path_obj.is_absolute():
+        path_obj = (base_dir or Path.cwd()) / path_obj
+    if absolute:
+        return str(path_obj.resolve())
+    return str(path_obj)
+
+
 def ensure_config_dir(path: Path = CONFIG_DIR):
     """
     Ensure that the configuration directory exists.
@@ -424,7 +439,7 @@ def validate_config_value(key: str, value: str) -> tuple[bool, Optional[str]]:
     
     if key in ("LOG_FILE_PATH", "DEBUG_LOG_PATH"):
         # Validate path is writable
-        log_path = Path(value)
+        log_path = Path(normalize_config_path(value, absolute=True))
         try:
             log_path.parent.mkdir(parents=True, exist_ok=True)
         except Exception as e:
@@ -432,7 +447,7 @@ def validate_config_value(key: str, value: str) -> tuple[bool, Optional[str]]:
     
     if key in ("FALKORDB_PATH", "FALKORDB_SOCKET_PATH"):
         # Validate path is writable
-        db_path = Path(value)
+        db_path = Path(normalize_config_path(value, absolute=True))
         try:
             db_path.parent.mkdir(parents=True, exist_ok=True)
         except Exception as e:

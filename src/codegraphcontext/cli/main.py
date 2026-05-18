@@ -305,6 +305,7 @@ def _load_credentials():
     from codegraphcontext.cli.config_manager import (
         ensure_config_dir,
         codegraphcontext_dotenv_at_cwd,
+        normalize_config_path,
     )
     
     # Ensure config directory exists (lazy initialization)
@@ -338,6 +339,14 @@ def _load_credentials():
             with open(mcp_file_path, "r") as f:
                 mcp_config = json.load(f)
             server_env = mcp_config.get("mcpServers", {}).get("CodeGraphContext", {}).get("env", {})
+            if isinstance(server_env, dict):
+                normalized_env = {}
+                for env_key, env_value in server_env.items():
+                    if env_value is not None and "PATH" in env_key:
+                        normalized_env[env_key] = normalize_config_path(str(env_value), absolute=True)
+                    else:
+                        normalized_env[env_key] = env_value
+                server_env = normalized_env
             _append_source("mcp.json", server_env)
         except Exception as e:
             console.print(f"[yellow]Warning: Could not load mcp.json: {e}[/yellow]")
@@ -384,6 +393,8 @@ def _load_credentials():
         if value is not None:  # Only set non-None values
             if key in runtime_env:
                 continue
+            if "PATH" in key:
+                value = normalize_config_path(str(value), absolute=True)
             os.environ[key] = str(value)
     
     # Report what was loaded
