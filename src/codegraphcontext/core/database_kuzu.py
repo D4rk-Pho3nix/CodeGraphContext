@@ -391,7 +391,10 @@ class KuzuSessionWrapper:
             'Annotation': ['name', 'path', 'line_number'],
             'Record': ['name', 'path', 'line_number'],
             'Property': ['name', 'path', 'line_number'],
-            'Parameter': ['name', 'path', 'function_line_number']
+            'Parameter': ['name', 'path', 'function_line_number'],
+            'Mixin': ['name', 'path', 'line_number'],
+            'Extension': ['name', 'path', 'line_number'],
+            'Object': ['name', 'path', 'line_number']
         }
     
     def __enter__(self):
@@ -549,6 +552,10 @@ class KuzuSessionWrapper:
                 debug_log(f"Kuzu idempotent collision (already exists) — query: {query[:120]}")
                 return KuzuResultWrapper(None)
             
+            if "binder exception" in err_str:
+                debug_log(f"Kuzu binder exception (expected during label matching check) — query: {query[:120]}... Error: {e}")
+                raise e
+            
             # Fallback for KuzuDB UNWIND bug (unordered_map::at)
             if "unordered_map::at" in err_str and "UNWIND" in query:
                 unwind_m = re.search(r'UNWIND\s+\$(\w+)\s+AS\s+(\w+)', query)
@@ -583,10 +590,16 @@ class KuzuSessionWrapper:
 
             error_logger(f"Kuzu Query failed: {query[:100]}... Error: {e}")
             debug_log(f"Kuzu Query failed: {query[:100]}... Error: {e}")
-            raise
-
     def _translate_query(self, query: str, parameters: Dict[str, Any]) -> Tuple[str, Dict[str, Any]]:
         """Translates Neo4j Cypher to Kuzu Cypher."""
+        PK_MAP = {
+            'Repository': 'path',
+            'File': 'path',
+            'Directory': 'path',
+            'Module': 'name',
+            'DbTable': 'name',
+            'ExternalClass': 'name'
+        }
         
         # 0. Define Schema Map (Strict property filtering)
         SCHEMA_MAP = {
@@ -606,7 +619,10 @@ class KuzuSessionWrapper:
             'Annotation': {'uid', 'name', 'path', 'line_number', 'end_line', 'source', 'docstring', 'lang', 'is_dependency'},
             'Record': {'uid', 'name', 'path', 'line_number', 'end_line', 'source', 'docstring', 'lang', 'is_dependency'},
             'Property': {'uid', 'name', 'path', 'line_number', 'end_line', 'source', 'docstring', 'lang', 'is_dependency'},
-            'Parameter': {'uid', 'name', 'path', 'function_line_number'}
+            'Parameter': {'uid', 'name', 'path', 'function_line_number'},
+            'Mixin': {'uid', 'name', 'path', 'line_number', 'end_line', 'source', 'docstring', 'lang', 'is_dependency'},
+            'Extension': {'uid', 'name', 'path', 'line_number', 'end_line', 'source', 'docstring', 'lang', 'is_dependency'},
+            'Object': {'uid', 'name', 'path', 'line_number', 'end_line', 'source', 'docstring', 'lang', 'is_dependency'}
         }
 
         # 1. Translate SET n += $props  and  SET n = $props  (map merge/assign)
@@ -626,6 +642,7 @@ class KuzuSessionWrapper:
                     new_params = parameters.copy()
                     
                     allowed_props = SCHEMA_MAP.get(label, set()) if label else None
+                    pk_field = PK_MAP.get(label, 'uid')
 
                     for k, v in props_dict.items():
                         if isinstance(v, (dict, list)) and k != 'args' and k != 'decorators':
@@ -634,6 +651,9 @@ class KuzuSessionWrapper:
                         if allowed_props and k not in allowed_props:
                            continue
                            
+                        if k == pk_field or k == 'uid':
+                            continue
+                            
                         clean_k = f"{param_name}_{k}"
                         set_clauses.append(f"{node_var}.{k} = ${clean_k}")
                         new_params[clean_k] = v
@@ -669,8 +689,9 @@ class KuzuSessionWrapper:
 
                     sample = batch_data[0]
                     parts = []
+                    pk_field = PK_MAP.get(label, 'uid')
                     for k in sample:
-                        if k == 'uid':
+                        if k == 'uid' or k == pk_field:
                             continue
                         if allowed and k not in allowed:
                             continue
@@ -684,70 +705,70 @@ class KuzuSessionWrapper:
                     r'MERGE\s+\((\w+):([^\s\{]+)\s*\{([^}]+)\}\)'
                 )
                 for m in list(merge_re.finditer(query)):
-                    var_name, label_raw, props_str = m.groups()
-                    label = label_raw.strip('`')
-                    if label not in self.uid_map:
-                        continue
+                     var_name, label_raw, props_str = m.groups()
+                     label = label_raw.strip('`')
+                     if label not in self.uid_map:
+                         continue
 
-                    pk_parts = self.uid_map[label]
-                    all_ok = True
+                     pk_parts = self.uid_map[label]
+                     all_ok = True
 
-                    for item in batch_data:
-                        uid_components = []
-                        for part in pk_parts:
-                            row_ref = re.search(
-                                rf'\b{part}\s*:\s*{re.escape(row_var)}\.(\w+)',
-                                props_str,
-                            )
-                            param_ref = re.search(
-                                rf'\b{part}\s*:\s*\$(\w+)', props_str
-                            )
-                            if row_ref:
-                                val = item.get(row_ref.group(1))
-                                if val is not None:
-                                    uid_components.append(str(val))
-                                else:
-                                    # Missing values are common in parser output for some
-                                    # languages. Use a deterministic placeholder component
-                                    # to keep UID generation stable and unique enough.
-                                    uid_components.append(f"__missing_{part}")
-                            elif param_ref:
-                                val = parameters.get(param_ref.group(1))
-                                if val is not None:
-                                    uid_components.append(str(val))
-                                else:
-                                    uid_components.append(f"__missing_{part}")
-                            else:
-                                all_ok = False
-                                break
+                     for item in batch_data:
+                         uid_components = []
+                         for part in pk_parts:
+                             row_ref = re.search(
+                                 rf'\b{part}\s*:\s*{re.escape(row_var)}\.(\w+)',
+                                 props_str,
+                             )
+                             param_ref = re.search(
+                                 rf'\b{part}\s*:\s*\$(\w+)', props_str
+                             )
+                             if row_ref:
+                                 val = item.get(row_ref.group(1))
+                                 if val is not None:
+                                     uid_components.append(str(val))
+                                 else:
+                                     # Missing values are common in parser output for some
+                                     # languages. Use a deterministic placeholder component
+                                     # to keep UID generation stable and unique enough.
+                                     uid_components.append(f"__missing_{part}")
+                             elif param_ref:
+                                 val = parameters.get(param_ref.group(1))
+                                 if val is not None:
+                                     uid_components.append(str(val))
+                                 else:
+                                     uid_components.append(f"__missing_{part}")
+                             else:
+                                 all_ok = False
+                                 break
 
-                        if all_ok:
-                            raw_uid = ''.join(uid_components)
-                            # Add a stable fingerprint of the row payload to avoid
-                            # collisions when key components are absent.
-                            row_payload = json.dumps(item, sort_keys=True, default=str)
-                            row_fingerprint = hashlib.sha1(row_payload.encode('utf-8')).hexdigest()[:16]
-                            item['uid'] = f"{raw_uid}|{row_fingerprint}"
-                        else:
-                            all_ok = False
-                            break
+                         if all_ok:
+                             raw_uid = ''.join(uid_components)
+                             # Add a stable fingerprint of the row payload to avoid
+                             # collisions when key components are absent.
+                             row_payload = json.dumps(item, sort_keys=True, default=str)
+                             row_fingerprint = hashlib.sha1(row_payload.encode('utf-8')).hexdigest()[:16]
+                             item['uid'] = f"{raw_uid}|{row_fingerprint}"
+                         else:
+                             all_ok = False
+                             break
 
-                    if all_ok:
-                        old_block = '{' + props_str + '}'
-                        new_block = (
-                            '{' + props_str + f', uid: {row_var}.uid' + '}'
-                        )
-                        query = query.replace(old_block, new_block, 1)
+                     if all_ok:
+                         old_block = '{' + props_str + '}'
+                         new_block = (
+                             '{' + props_str + f', uid: {row_var}.uid' + '}'
+                         )
+                         query = query.replace(old_block, new_block, 1)
 
-                        # Kuzu node tables are keyed by uid for these labels, so MERGE
-                        # should match on the primary key only. Matching on additional
-                        # non-PK fields can still lead to duplicate PK insert attempts.
-                        query = re.sub(
-                            rf"MERGE\s+\({re.escape(var_name)}:{re.escape(label_raw)}\s*\{{[^}}]*uid:\s*{re.escape(row_var)}\.uid[^}}]*\}}\)",
-                            f"MERGE ({var_name}:{label_raw} {{uid: {row_var}.uid}})",
-                            query,
-                            count=1,
-                        )
+                         # Kuzu node tables are keyed by uid for these labels, so MERGE
+                         # should match on the primary key only. Matching on additional
+                         # non-PK fields can still lead to duplicate PK insert attempts.
+                         query = re.sub(
+                             rf"MERGE\s+\({re.escape(var_name)}:{re.escape(label_raw)}\s*\{{[^}}]*uid:\s*{re.escape(row_var)}\.uid[^}}]*\}}\)",
+                             f"MERGE ({var_name}:{label_raw} {{uid: {row_var}.uid}})",
+                             query,
+                             count=1,
+                         )
 
                 # 1.5c: Strip explicit SET clauses for properties not in the schema
                 # (e.g. SET m.alias = row.alias when Module has no 'alias' column)
@@ -766,6 +787,8 @@ class KuzuSessionWrapper:
                                 lbl = lbl_m.group(1).strip('`')
                                 allowed_s = SCHEMA_MAP.get(lbl)
                                 if allowed_s and prop_name not in allowed_s:
+                                    continue
+                                if prop_name == PK_MAP.get(lbl, 'uid') or prop_name == 'uid':
                                     continue
                         kept.append(a)
                     if kept:

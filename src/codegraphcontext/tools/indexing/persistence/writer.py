@@ -238,10 +238,17 @@ class GraphWriter:
                     key_order = sorted(all_keys)
                     batch[:] = [{k: b[k] for k in key_order if k in b} for b in batch]
 
+                if label in {"Module", "DbTable", "ExternalClass"}:
+                    merge_clause = f"MERGE (n:{label} {{name: row.name}})"
+                    match_clause = f"MATCH (n:{label} {{name: row.name}})"
+                else:
+                    merge_clause = f"MERGE (n:{label} {{name: row.name, path: $file_path, line_number: row.line_number}})"
+                    match_clause = f"MATCH (n:{label} {{name: row.name, path: $file_path, line_number: row.line_number}})"
+
                 session.run(
                     f"""
                     UNWIND $batch AS row
-                    MERGE (n:{label} {{name: row.name, path: $file_path, line_number: row.line_number}})
+                    {merge_clause}
                     SET n += row
                 """,
                     batch=batch,
@@ -251,7 +258,7 @@ class GraphWriter:
                     f"""
                     UNWIND $batch AS row
                     MATCH (f:File {{path: $file_path}})
-                    MATCH (n:{label} {{name: row.name, path: $file_path, line_number: row.line_number}})
+                    {match_clause}
                     MERGE (f)-[:CONTAINS]->(n)
                 """,
                     batch=batch,
