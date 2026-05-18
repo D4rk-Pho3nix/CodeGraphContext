@@ -520,6 +520,11 @@ class KuzuSessionWrapper:
         translated_query, translated_params = self._translate_query(query, parameters)
         debug_log(f"Translated Query: {translated_query[:200]}")
         try:
+            # Force loop fallback for relationship writes inside UNWIND to avoid Kuzu query planner bugs
+            # which can incorrectly bind/corrupt relationship endpoints across rows in the batch.
+            if "UNWIND" in query and ("-[" in query or "]->" in query):
+                raise Exception("unordered_map::at (forced fallback to avoid relationship UNWIND planner bugs)")
+
             # 2. Execute with appropriate locking
             # Only write queries need the global lock. Read-only queries can execute concurrently.
             if query_type == "write":
