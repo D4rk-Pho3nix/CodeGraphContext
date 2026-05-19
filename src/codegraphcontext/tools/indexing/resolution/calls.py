@@ -800,7 +800,11 @@ def resolve_function_call(
                 )
                 for cand in filtered_candidates:
                     cand_arity = function_arg_count(cand)
-                    if cand_arity is None or not any(function_arg_count(existing) == cand_arity for existing in method_candidates_by_hierarchy):
+                    if cand_arity is None or not any(
+                        function_arg_count(existing) == cand_arity
+                        and function_arg_types(existing) == function_arg_types(cand)
+                        for existing in method_candidates_by_hierarchy
+                    ):
                         method_candidates_by_hierarchy.append(cand)
 
             if not fallback_method_owner_path and method_name in class_method_names.get(current, set()):
@@ -817,7 +821,11 @@ def resolve_function_call(
             if extension_candidates:
                 for cand in extension_candidates:
                     cand_arity = function_arg_count(cand)
-                    if cand_arity is None or not any(function_arg_count(existing) == cand_arity for existing in extension_candidates_by_hierarchy):
+                    if cand_arity is None or not any(
+                        function_arg_count(existing) == cand_arity
+                        and function_arg_types(existing) == function_arg_types(cand)
+                        for existing in extension_candidates_by_hierarchy
+                    ):
                         extension_candidates_by_hierarchy.append(cand)
 
             for base_name in global_class_bases.get(current, []):
@@ -962,7 +970,11 @@ def resolve_function_call(
             resolved_called_context,
         ) = method_target_for_type(receiver_type, called_name)
         if resolved_path:
-            resolution_tier = 4
+            fqn = (local_imports.get(receiver_type) if local_imports else None) or (receiver_type if "." in receiver_type else None)
+            if fqn and len(imports_map.get(fqn, [])) == 1:
+                resolution_tier = 3
+            else:
+                resolution_tier = 4
         else:
             receiver_resolution_failed = True
 
@@ -994,7 +1006,11 @@ def resolve_function_call(
             resolved_called_context,
         ) = method_target_for_type(implicit_type, called_name)
         if resolved_path:
-            resolution_tier = 4
+            fqn = (local_imports.get(call["implicit_receiver_type"]) if local_imports else None) or (implicit_type if "." in implicit_type else None)
+            if fqn and len(imports_map.get(fqn, [])) == 1:
+                resolution_tier = 3
+            else:
+                resolution_tier = 4
         elif unresolved_overloaded_callable_reference or unresolved_overloaded_method:
             record_skip(
                 "unresolved_overloaded_callable_reference"
@@ -1064,7 +1080,23 @@ def resolve_function_call(
         possible_paths = imports_map.get(receiver_type_for_path, []) if receiver_type_for_path else []
         if possible_paths:
             resolved_path = possible_paths[0]
-            resolution_tier = 4
+            raw_receiver_type = (
+                extension_receiver_type
+                or call.get("inferred_obj_type")
+                or call.get("implicit_receiver_type")
+            )
+            fqn = None
+            if raw_receiver_type:
+                raw_receiver_type = strip_type_modifiers(raw_receiver_type)
+                if local_imports and raw_receiver_type in local_imports:
+                    fqn = local_imports[raw_receiver_type]
+                elif "." in raw_receiver_type:
+                    fqn = raw_receiver_type
+            
+            if fqn and len(imports_map.get(fqn, [])) == 1:
+                resolution_tier = 3
+            else:
+                resolution_tier = 4
             receiver_resolution_failed = False
 
     if not resolved_path and receiver_resolution_failed:
@@ -1620,7 +1652,10 @@ def build_function_call_groups(
             and class_data.get("end_line") is not None
             and class_data["line_number"] <= line_number <= class_data["end_line"]
         ]
-        if not companion_objects or func.get("context") not in {
+        func_context = func.get("context")
+        if isinstance(func_context, tuple) and len(func_context) > 0:
+            func_context = func_context[0]
+        if not companion_objects or func_context not in {
             companion.get("name") for companion in companion_objects
         }:
             return []
@@ -1648,6 +1683,8 @@ def build_function_call_groups(
         package_name: Optional[str],
     ) -> List[str]:
         context = func.get("context") or func.get("class_context")
+        if isinstance(context, tuple) and len(context) > 0:
+            context = context[0]
         context_names = list(type_keys_for_maps(context, package_name=package_name))
         context_names.extend(companion_owner_context_names(fd, func, package_name))
         return list(dict.fromkeys(context_names))

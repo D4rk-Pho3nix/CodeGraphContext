@@ -1629,6 +1629,7 @@ fun make() = A.Inner()
         assert ids_variable["initializer_inferred_type"] == "Sequence"
         assert edge["called_line_number"] == sequence_get["line_number"]
 
+
     def test_kotlin_sequence_map_expression_uses_receiver_type_hint(self, parser):
         service_data = _write_and_parse(parser, OVERLOADED_SERVICE_SRC)
         caller_data = _write_and_parse(parser, SEQUENCE_MAP_CALLER_SRC)
