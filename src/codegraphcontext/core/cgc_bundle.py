@@ -280,8 +280,15 @@ class CGCBundle:
                                 if hasattr(node, attr):
                                     repo[attr] = getattr(node, attr)
                     
-                    metadata["repo"] = repo.get('name', str(repo_path))
-                    metadata["repo_path"] = repo.get('path')
+                    metadata["repo"] = repo.get('name', str(repo_path.name if repo_path else 'unknown'))
+                    # Clean up absolute path prefix to keep it relative
+                    meta_path = repo.get('path', '')
+                    if repo_path and meta_path.startswith(str(repo_path.resolve())):
+                        repo_str = str(repo_path.resolve())
+                        rel = meta_path[len(repo_str):].lstrip('/')
+                        metadata["repo_path"] = "./" + rel if rel else "."
+                    else:
+                        metadata["repo_path"] = meta_path
                     metadata["is_dependency"] = repo.get('is_dependency', False)
             else:
                 # All repositories
@@ -410,6 +417,14 @@ class CGCBundle:
                         elif hasattr(node, 'properties'):
                             node_dict = dict(node.properties)
                     
+                    # Clean up absolute path prefix to keep it relative
+                    if repo_path:
+                        repo_str = str(repo_path.resolve())
+                        for key, val in list(node_dict.items()):
+                            if isinstance(val, str) and val.startswith(repo_str):
+                                rel = val[len(repo_str):].lstrip('/')
+                                node_dict[key] = "./" + rel if rel else "."
+                    
                     node_dict['_labels'] = labels
                     
                     # Store internal ID for reference
@@ -479,6 +494,14 @@ class CGCBundle:
                             rel_props = dict(rel._properties)
                         elif hasattr(rel, 'properties'):
                             rel_props = dict(rel.properties)
+                    
+                    # Clean up absolute path prefix inside edge properties
+                    if repo_path:
+                        repo_str = str(repo_path.resolve())
+                        for key, val in list(rel_props.items()):
+                            if isinstance(val, str) and val.startswith(repo_str):
+                                rel = val[len(repo_str):].lstrip('/')
+                                rel_props[key] = "./" + rel if rel else "."
                     
                     # Create edge representation
                     edge_dict = {

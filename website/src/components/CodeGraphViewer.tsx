@@ -383,8 +383,8 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
     return all;
   });
   const [showConfig, setShowConfig] = useState(false);
-  const [lineWidth, setLineWidth] = useState(0.8);
-  const [nodeSize, setNodeSize] = useState(1.0);
+  const [lineWidth, setLineWidth] = useState(0.24);
+  const [nodeSize, setNodeSize] = useState(3.0);
   const [graphMode, setGraphMode] = useState<VisualizationMode>('classic');
   const [showModeMenu, setShowModeMenu] = useState(false);
   const modeMenuRef = useRef<HTMLDivElement>(null);
@@ -1261,16 +1261,16 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
                       <div className="mb-6 px-1">
                         <label className="text-[10px] text-gray-400 uppercase font-bold tracking-widest block mb-2">Node Size: {nodeSize.toFixed(1)}x</label>
                         <input
-                          type="range" min="0.2" max="4.0" step="0.1" value={nodeSize}
+                          type="range" min="0.5" max="8.0" step="0.1" value={nodeSize}
                           onChange={(e) => setNodeSize(parseFloat(e.target.value))}
                           className="w-full accent-purple-500 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer"
                         />
                       </div>
 
                       <div className="mb-6 px-1">
-                        <label className="text-[10px] text-gray-400 uppercase font-bold tracking-widest block mb-2">Edge Width: {lineWidth.toFixed(1)}px</label>
+                        <label className="text-[10px] text-gray-400 uppercase font-bold tracking-widest block mb-2">Edge Width: {lineWidth.toFixed(2)}px</label>
                         <input
-                          type="range" min="0.2" max="3.0" step="0.1" value={lineWidth}
+                          type="range" min="0.05" max="3.0" step="0.05" value={lineWidth}
                           onChange={(e) => setLineWidth(parseFloat(e.target.value))}
                           className="w-full accent-blue-500 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer"
                         />

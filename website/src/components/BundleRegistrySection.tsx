@@ -73,7 +73,7 @@ const BundleRegistrySection = () => {
             version: '1.26.4',
             commit: 'a1b2c3d',
             size: '50MB',
-            download_url: '#',
+            download_url: '/sample_project.cgc',
             generated_at: '2026-01-13T00:00:00Z',
             category: 'Data Science',
             description: 'Fundamental package for scientific computing',
@@ -85,7 +85,7 @@ const BundleRegistrySection = () => {
             version: '2.1.0',
             commit: 'def456',
             size: '80MB',
-            download_url: '#',
+            download_url: '/sample_project.cgc',
             generated_at: '2026-01-13T00:00:00Z',
             category: 'Data Science',
             description: 'Data analysis and manipulation library',
@@ -97,7 +97,7 @@ const BundleRegistrySection = () => {
             version: '0.109.0',
             commit: 'ghi789',
             size: '15MB',
-            download_url: '#',
+            download_url: '/sample_project.cgc',
             generated_at: '2026-01-13T00:00:00Z',
             category: 'Web Framework',
             description: 'Modern web framework for building APIs',
@@ -109,7 +109,7 @@ const BundleRegistrySection = () => {
             version: '2.31.0',
             commit: 'jkl012',
             size: '10MB',
-            download_url: '#',
+            download_url: '/sample_project.cgc',
             generated_at: '2026-01-13T00:00:00Z',
             category: 'HTTP',
             description: 'HTTP library for Python',
@@ -121,7 +121,7 @@ const BundleRegistrySection = () => {
             version: '3.0.0',
             commit: 'mno345',
             size: '12MB',
-            download_url: '#',
+            download_url: '/sample_project.cgc',
             generated_at: '2026-01-13T00:00:00Z',
             category: 'Web Framework',
             description: 'Lightweight WSGI web application framework',
@@ -383,13 +383,21 @@ const BundleRegistrySection = () => {
 
                                     </div>
 
-                                    {/* Download Button */}
-                                    <Button className="w-full" asChild>
-                                        <a href={bundle.download_url} download>
-                                            <Download className="w-4 h-4 mr-2" />
-                                            Download Bundle
-                                        </a>
-                                    </Button>
+                                    {/* Action Buttons */}
+                                    <div className="flex gap-3 w-full">
+                                        <Button className="flex-1 bg-gradient-to-br from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md border-0" asChild>
+                                            <a href={`/explore?bundle_url=${encodeURIComponent(bundle.download_url)}`}>
+                                                <ExternalLink className="w-4 h-4 mr-2 shrink-0" />
+                                                Visualize
+                                            </a>
+                                        </Button>
+                                        <Button variant="outline" className="flex-1" asChild>
+                                            <a href={bundle.download_url} download>
+                                                <Download className="w-4 h-4 mr-2 shrink-0" />
+                                                Download
+                                            </a>
+                                        </Button>
+                                    </div>
 
                                     {/* Usage Hint with Copy Button */}
                                     <div className="bg-muted p-2 rounded text-xs font-mono flex items-center justify-between gap-2 group">

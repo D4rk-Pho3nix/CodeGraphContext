@@ -5,6 +5,38 @@ import LocalUploader from "../components/LocalUploader";
 import { motion, AnimatePresence } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import JSZip from "jszip";
+
+const sanitizePath = (pathStr: string, repoName?: string): string => {
+  if (!pathStr) return '';
+  
+  // Normalize Windows slashes
+  let p = pathStr.replace(/\\/g, '/');
+  
+  // If it's already relative, just return it
+  if (p.startsWith('.') || (!p.startsWith('/') && !p.match(/^[a-zA-Z]:\//))) {
+    return p.startsWith('./') ? p : './' + p;
+  }
+  
+  // Detect if we can make it relative using the repoName
+  if (repoName) {
+    const parts = p.split('/');
+    const repoIndex = parts.lastIndexOf(repoName);
+    if (repoIndex !== -1) {
+      return './' + parts.slice(repoIndex).join('/');
+    }
+  }
+  
+  // Generic cleanup for absolute paths
+  const segments = p.split('/').filter(Boolean);
+  if (segments.length > 3) {
+    if (p.startsWith('/home/') || p.startsWith('/Users/') || p.includes('/runner/work/')) {
+      return './' + segments.slice(-3).join('/');
+    }
+  }
+  
+  return p;
+};
 
 const Explore = () => {
   const [searchParams] = useSearchParams();
@@ -16,7 +48,137 @@ const Explore = () => {
   const backend = searchParams.get("backend") || "";
   const repoPath = searchParams.get("repo_path") || "";
   const cypherQuery = searchParams.get("cypher_query") || "";
+  const bundleUrl = searchParams.get("bundle_url") || "";
   
+  // If bundleUrl is present, we download and parse it client-side
+  useEffect(() => {
+    if (!bundleUrl) return;
+
+    const fetchBundle = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const response = await fetch(bundleUrl);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch bundle from URL (${response.status})`);
+        }
+        
+        const buffer = await response.arrayBuffer();
+        const jszip = await JSZip.loadAsync(buffer);
+        
+        const nodesFile = jszip.file("nodes.jsonl");
+        const edgesFile = jszip.file("edges.jsonl");
+        
+        if (!nodesFile || !edgesFile) {
+          throw new Error("Invalid CGC bundle: nodes.jsonl and edges.jsonl are required.");
+        }
+        
+        let metadata: any = {};
+        if (jszip.file("metadata.json")) {
+          const metaText = await jszip.file("metadata.json")!.async("text");
+          try {
+            metadata = JSON.parse(metaText);
+          } catch (e) {
+            console.warn("Could not parse metadata.json", e);
+          }
+        }
+        
+        const repoName = metadata.repo || "";
+        
+        const nodesText = await nodesFile.async("text");
+        const nodeLines = nodesText.split("\n").filter(line => line.trim() !== "");
+        const nodes = nodeLines.map((line, idx) => {
+          try {
+            const nodeData = JSON.parse(line);
+            const labels = nodeData._labels || [];
+            const id = nodeData._id;
+            
+            // Extract properties
+            const properties: Record<string, any> = {};
+            for (const key of Object.keys(nodeData)) {
+              if (key !== '_labels' && key !== '_id') {
+                properties[key] = nodeData[key];
+              }
+            }
+            
+            // Clean absolute paths in node properties
+            for (const key of Object.keys(properties)) {
+              if (typeof properties[key] === 'string') {
+                const val = properties[key];
+                if (val.startsWith('/') || val.match(/^[a-zA-Z]:\\/) || val.includes('\\') || val.includes('/')) {
+                  if (key === 'path' || key === 'file' || key === 'repo_path' || key === 'import_path') {
+                    properties[key] = sanitizePath(val, repoName);
+                  }
+                }
+              }
+            }
+            
+            let displayName = String(properties.name || properties.label || properties.path || 'Unknown');
+            if (displayName.startsWith('/') || displayName.includes('\\') || displayName.includes('/')) {
+              displayName = sanitizePath(displayName, repoName);
+            }
+            
+            const type = labels[0] ? (labels[0].charAt(0).toUpperCase() + labels[0].slice(1)) : 'Other';
+            
+            return {
+              id: String(id),
+              name: displayName,
+              label: displayName,
+              type: type,
+              file: String(properties.path || properties.file || ''),
+              val: (labels.length > 0 && ['Repository', 'Class', 'Interface', 'Trait'].includes(labels[0])) ? 4 : 2,
+              properties: properties
+            };
+          } catch (err) {
+            console.error("Failed to parse node line at index", idx, err);
+            return null;
+          }
+        }).filter(Boolean);
+        
+        const edgesText = await edgesFile.async("text");
+        const edgeLines = edgesText.split("\n").filter(line => line.trim() !== "");
+        const links = edgeLines.map((line, idx) => {
+          try {
+            const edgeData = JSON.parse(line);
+            return {
+              id: `${edgeData.from}_to_${edgeData.to}_${edgeData.type}_${idx}`,
+              source: String(edgeData.from),
+              target: String(edgeData.to),
+              type: String(edgeData.type).toUpperCase()
+            };
+          } catch (err) {
+            console.error("Failed to parse edge line at index", idx, err);
+            return null;
+          }
+        }).filter(Boolean);
+        
+        const filePaths: string[] = [];
+        for (const n of nodes as any[]) {
+          if (n.file && n.type.toLowerCase() === 'file') {
+            filePaths.push(n.file);
+          }
+        }
+        const sortedFiles = Array.from(new Set(filePaths)).sort();
+        
+        setGraphData({
+          nodes,
+          links,
+          files: sortedFiles,
+          fileContents: {},
+          metadata
+        });
+      } catch (err: any) {
+        console.error("Fetch Bundle Error:", err);
+        setError(err.message);
+        toast.error("Failed to load bundle: " + err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchBundle();
+  }, [bundleUrl]);
+
   // If backend param is present, we automatically fetch from the local python server
   useEffect(() => {
     if (!backend && !cypherQuery) return;
@@ -51,9 +213,11 @@ const Explore = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-background text-center px-6">
         <Loader2 className="w-12 h-12 animate-spin text-primary mb-4" />
-        <p className="text-lg font-medium animate-pulse text-muted-foreground">Connecting to local database...</p>
+        <p className="text-lg font-medium animate-pulse text-muted-foreground">
+          {bundleUrl ? "Downloading and parsing pre-indexed CGC bundle..." : "Connecting to local database..."}
+        </p>
       </div>
     );
   }

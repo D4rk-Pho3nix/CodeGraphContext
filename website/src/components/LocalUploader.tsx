@@ -13,6 +13,37 @@ const IGNORED_DIRS = new Set([
   '.vscode'
 ]);
 
+const sanitizePath = (pathStr: string, repoName?: string): string => {
+  if (!pathStr) return '';
+  
+  // Normalize Windows slashes
+  let p = pathStr.replace(/\\/g, '/');
+  
+  // If it's already relative, just return it
+  if (p.startsWith('.') || (!p.startsWith('/') && !p.match(/^[a-zA-Z]:\//))) {
+    return p.startsWith('./') ? p : './' + p;
+  }
+  
+  // Detect if we can make it relative using the repoName
+  if (repoName) {
+    const parts = p.split('/');
+    const repoIndex = parts.lastIndexOf(repoName);
+    if (repoIndex !== -1) {
+      return './' + parts.slice(repoIndex).join('/');
+    }
+  }
+  
+  // Generic cleanup for absolute paths
+  const segments = p.split('/').filter(Boolean);
+  if (segments.length > 3) {
+    if (p.startsWith('/home/') || p.startsWith('/Users/') || p.includes('/runner/work/')) {
+      return './' + segments.slice(-3).join('/');
+    }
+  }
+  
+  return p;
+};
+
 const isPathIgnored = (path: string) => {
   const parts = path.split(/[\/\\]/);
   return parts.some(part => IGNORED_DIRS.has(part));
@@ -21,7 +52,7 @@ const isPathIgnored = (path: string) => {
 export default function LocalUploader({ onComplete }: { onComplete: (data: unknown) => void }) {
   const [isParsing, setIsParsing] = useState(false);
   const [progress, setProgress] = useState({ text: "", value: 0 });
-  const [activeTab, setActiveTab] = useState<'folder' | 'zip' | 'github'>('folder');
+  const [activeTab, setActiveTab] = useState<'folder' | 'zip' | 'cgc' | 'github'>('folder');
   const [githubUrl, setGithubUrl] = useState("");
   const [indexVariables, setIndexVariables] = useState(false);
 
@@ -106,6 +137,134 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
     }
   };
 
+  const handleCgcUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsParsing(true);
+    try {
+      setProgress({ text: "Unzipping CGC bundle...", value: 10 });
+      const buffer = await file.arrayBuffer();
+      const jszip = await JSZip.loadAsync(buffer);
+      
+      const nodesFile = jszip.file("nodes.jsonl");
+      const edgesFile = jszip.file("edges.jsonl");
+      
+      if (!nodesFile || !edgesFile) {
+        alert("Invalid CGC bundle: nodes.jsonl and edges.jsonl are required.");
+        setIsParsing(false);
+        return;
+      }
+      
+      setProgress({ text: "Parsing CGC bundle...", value: 30 });
+      
+      let metadata: any = {};
+      if (jszip.file("metadata.json")) {
+        const metaText = await jszip.file("metadata.json")!.async("text");
+        try {
+          metadata = JSON.parse(metaText);
+        } catch (e) {
+          console.warn("Could not parse metadata.json", e);
+        }
+      }
+      
+      const repoName = metadata.repo || "Unknown Repository";
+      setProgress({ text: `Extracting nodes for ${repoName}...`, value: 50 });
+      
+      const nodesText = await nodesFile.async("text");
+      const nodeLines = nodesText.split("\n").filter(line => line.trim() !== "");
+      const nodes = nodeLines.map((line, idx) => {
+        try {
+          const nodeData = JSON.parse(line);
+          const labels = nodeData._labels || [];
+          const id = nodeData._id;
+          
+          // Extract properties
+          const properties: Record<string, any> = {};
+          for (const key of Object.keys(nodeData)) {
+            if (key !== '_labels' && key !== '_id') {
+              properties[key] = nodeData[key];
+            }
+          }
+          
+          // Clean absolute paths in node properties
+          for (const key of Object.keys(properties)) {
+            if (typeof properties[key] === 'string') {
+              const val = properties[key];
+              if (val.startsWith('/') || val.match(/^[a-zA-Z]:\\/) || val.includes('\\') || val.includes('/')) {
+                if (key === 'path' || key === 'file' || key === 'repo_path' || key === 'import_path') {
+                  properties[key] = sanitizePath(val, repoName);
+                }
+              }
+            }
+          }
+          
+          let displayName = String(properties.name || properties.label || properties.path || 'Unknown');
+          if (displayName.startsWith('/') || displayName.includes('\\') || displayName.includes('/')) {
+            displayName = sanitizePath(displayName, repoName);
+          }
+          
+          const type = labels[0] ? (labels[0].charAt(0).toUpperCase() + labels[0].slice(1)) : 'Other';
+          
+          return {
+            id: String(id),
+            name: displayName,
+            label: displayName,
+            type: type,
+            file: String(properties.path || properties.file || ''),
+            val: (labels.length > 0 && ['Repository', 'Class', 'Interface', 'Trait'].includes(labels[0])) ? 4 : 2,
+            properties: properties
+          };
+        } catch (err) {
+          console.error("Failed to parse node line at index", idx, err);
+          return null;
+        }
+      }).filter(Boolean);
+      
+      setProgress({ text: "Extracting edges...", value: 70 });
+      
+      const edgesText = await edgesFile.async("text");
+      const edgeLines = edgesText.split("\n").filter(line => line.trim() !== "");
+      const links = edgeLines.map((line, idx) => {
+        try {
+          const edgeData = JSON.parse(line);
+          return {
+            id: `${edgeData.from}_to_${edgeData.to}_${edgeData.type}_${idx}`,
+            source: String(edgeData.from),
+            target: String(edgeData.to),
+            type: String(edgeData.type).toUpperCase()
+          };
+        } catch (err) {
+          console.error("Failed to parse edge line at index", idx, err);
+          return null;
+        }
+      }).filter(Boolean);
+      
+      setProgress({ text: "Building tree index...", value: 90 });
+      
+      const filePaths: string[] = [];
+      for (const n of nodes as any[]) {
+        if (n.file && n.type.toLowerCase() === 'file') {
+          filePaths.push(n.file);
+        }
+      }
+      const sortedFiles = Array.from(new Set(filePaths)).sort();
+      
+      setProgress({ text: "Complete!", value: 100 });
+      await new Promise(r => setTimeout(r, 400));
+      
+      onComplete({
+        nodes,
+        links,
+        files: sortedFiles,
+        fileContents: {},
+        metadata
+      });
+    } catch (err) {
+      console.error(err);
+      setIsParsing(false);
+    }
+  };
+
   const handleGithubFetch = async () => {
     if (!githubUrl || !githubUrl.includes("github.com")) {
       alert("Please enter a valid GitHub URL.");
@@ -152,7 +311,7 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
              if (!r.ok) r = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/master/${p}`);
              if (r.ok) files.push({ path: p, content: await r.text() });
            } catch (e) { console.warn("Fetch failed", e); }
-        }));
+         }));
       }
       
       await processFiles(files);
@@ -170,6 +329,7 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
       <div className="flex bg-white/5 p-1.5 rounded-2xl mb-8 relative z-10 w-full shadow-inner border border-white/5">
         <button onClick={() => setActiveTab('folder')} className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'folder' ? 'bg-gradient-to-br from-purple-500 to-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}>Folder</button>
         <button onClick={() => setActiveTab('zip')} className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'zip' ? 'bg-gradient-to-br from-purple-500 to-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}>ZIP</button>
+        <button onClick={() => setActiveTab('cgc')} className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'cgc' ? 'bg-gradient-to-br from-purple-500 to-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}>CGC Bundle</button>
         <button onClick={() => setActiveTab('github')} className={`flex-1 py-2.5 text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'github' ? 'bg-gradient-to-br from-purple-500 to-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}>GitHub</button>
       </div>
 
@@ -195,11 +355,27 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
                 <FileArchive className="w-10 h-10 text-blue-400" />
               </div>
               <h3 className="text-2xl font-bold mb-2 text-white">Upload ZIP</h3>
-              <p className="text-gray-400 text-sm mb-8 max-w-[250px]">Drop a compressed repository. Unzipped securely in memory.</p>
+              <p className="text-gray-400 text-sm mb-8 max-w-[250px]">Drop a compressed repository. Unzipped and parsed securely in memory.</p>
               <div className="relative w-full max-w-[280px]">
                 <Button className="bg-white text-black relative cursor-pointer hover:bg-gray-200 rounded-full px-10 py-6 text-lg w-full shadow-[0_0_20px_rgba(255,255,255,0.1)]">
                   Select ZIP Archive
                   <input type="file" accept=".zip" onChange={handleZipUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+                </Button>
+              </div>
+            </motion.div>
+          )}
+
+          {activeTab === 'cgc' && (
+            <motion.div key="cgc" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center w-full">
+              <div className="bg-gradient-to-br from-emerald-500/20 to-teal-500/20 p-5 rounded-full mb-6 border border-emerald-500/30">
+                <FileArchive className="w-10 h-10 text-emerald-400" />
+              </div>
+              <h3 className="text-2xl font-bold mb-2 text-white">Upload CGC Bundle</h3>
+              <p className="text-gray-400 text-sm mb-8 max-w-[250px]">Drop a .cgc pre-indexed bundle file. Loaded instantly in-memory.</p>
+              <div className="relative w-full max-w-[280px]">
+                <Button className="bg-white text-black relative cursor-pointer hover:bg-gray-200 rounded-full px-10 py-6 text-lg w-full shadow-[0_0_20px_rgba(255,255,255,0.1)]">
+                  Select CGC Bundle
+                  <input type="file" accept=".cgc" onChange={handleCgcUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
                 </Button>
               </div>
             </motion.div>
