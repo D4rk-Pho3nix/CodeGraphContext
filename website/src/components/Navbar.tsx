@@ -63,15 +63,7 @@ const Navbar: React.FC = () => {
                 Pre-indexed
               </a>
             </li>
-            <li>
-              <a
-                href="#bundle-generator"
-                className="px-3 py-1.5 rounded-full hover:bg-[hsl(var(--primary)/0.12)] hover:text-[hsl(var(--primary))] transition-all duration-200"
-                onClick={handleScroll}
-              >
-                Generator
-              </a>
-            </li>
+
             <li>
               <a
                 href="#cookbook"
@@ -152,7 +144,6 @@ const Navbar: React.FC = () => {
             {[
               { label: "Features", href: "#features" },
               { label: "Pre-indexed Bundles", href: "#bundle-registry" },
-              { label: "CGC Bundle Generator", href: "#bundle-generator" },
               { label: "Cookbook / Guides", href: "#cookbook" },
               { label: "Interactive Demo", href: "#demo" },
               { label: "Get Started / Install", href: "#installation" },

@@ -7,14 +7,14 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import JSZip from "jszip";
 import { parseFilesIntoGraph } from "../lib/parser";
-import { parseFilesWithPyodide } from "../lib/parser-pyodide";
+
 
 const IGNORED_DIRS = new Set([
   'node_modules', '.git', '.github', 'dist', 'build', 'out', 'coverage', 
   '.next', '.nuxt', '__pycache__', 'venv', '.venv', 'env', '.env', '.tox',
   'eggs', 'target', '.gradle', '.idea', 'cmake-build-debug', 'bin', 'obj',
   'packages', 'vendor', 'Pods', '.build', 'DerivedData', '.dart_tool',
-  '.vscode', 'test', 'tests', '__tests__', 'spec', 'specs'
+  '.vscode'
 ]);
 
 const isPathIgnored = (path: string) => {
@@ -297,11 +297,21 @@ const Explore = () => {
       let files: any[] = [];
       let fileContents: Record<string, string> = {};
 
+      const getGithubHeaders = () => {
+        const headers: Record<string, string> = {};
+        const pat = localStorage.getItem('github_pat');
+        if (pat) {
+          headers['Authorization'] = `token ${pat}`;
+        }
+        return headers;
+      };
+
       // 2. Resolve the default branch dynamically (natively CORS-compliant, rate-limited at 60/hr/IP on GitHub REST API)
       let detectedBranch = "main";
+      let latestCommitSha = "";
       try {
         console.log(`[Explore] Resolving default branch for ${owner}/${repo} dynamically...`);
-        const apiRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`);
+        const apiRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, { headers: getGithubHeaders() });
         if (apiRes.ok) {
           const apiData = await apiRes.json();
           if (apiData && apiData.default_branch) {
@@ -309,8 +319,18 @@ const Explore = () => {
             console.log(`[Explore] GitHub REST API resolved default branch: ${detectedBranch}`);
           }
         }
+        
+        console.log(`[Explore] Resolving latest commit SHA for branch ${detectedBranch} dynamically...`);
+        const commitsRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/commits/${detectedBranch}`, { headers: getGithubHeaders() });
+        if (commitsRes.ok) {
+          const commitsData = await commitsRes.json();
+          if (commitsData && commitsData.sha) {
+            latestCommitSha = commitsData.sha;
+            console.log(`[Explore] GitHub REST API resolved latest commit SHA: ${latestCommitSha}`);
+          }
+        }
       } catch (err) {
-        console.warn("[Explore] Failed to resolve default branch dynamically via GitHub API:", err);
+        console.warn("[Explore] Failed to resolve default branch or commit SHA dynamically via GitHub API:", err);
       }
 
       // Compile a robust fallback order of branch names to try (ensuring non-standard branches like unstable/trunk/develop work)
@@ -381,28 +401,54 @@ const Explore = () => {
           } else if (isEstimateReliable) {
             setProgressText(`Downloading repository archive: ${pct}% (${mbLoaded} MB of ~${(estimatedZipSize / 1024 / 1024).toFixed(2)} MB)`);
           } else {
-            setProgressText(`Downloading repository archive: ${pct}% (${mbLoaded} MB, size unknown)`);
+            setProgressText(`Downloading repository archive: ${pct}% (${mbLoaded} MB)`);
           }
           setProgressValue(10 + Math.floor(pct * 0.15));
         };
 
-        // TIER 1: Same-Origin Serverless Rewrite / Dev Proxy (Fastest & CORS-Free)
-        for (const branch of branchesToTry) {
-          try {
-            console.log(`[Explore] Tier 1: Fetching zip archive via same-origin rewrite for branch: ${branch}`);
-            const zipUrl = `/api/github-zip/${owner}/${repo}/${branch}`;
-            const tempRes = await fetchWithProgress(zipUrl, updateDownloadProgress);
-            if (tempRes && tempRes.ok) {
-              const contentType = tempRes.headers.get("content-type") || "";
-              if (!contentType.includes("text/html") && !contentType.includes("application/json")) {
+        // TIER 0: Authenticated GitHub REST API Zipball (Direct & CORS-compliant for Private Repos)
+        const pat = localStorage.getItem('github_pat');
+        if (pat) {
+          for (const branch of branchesToTry) {
+            try {
+              console.log(`[Explore] Authenticated Tier: Fetching private zipball for branch: ${branch}`);
+              const zipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball/${branch}`;
+              const tempRes = await fetch(zipUrl, {
+                headers: {
+                  'Authorization': `token ${pat}`
+                }
+              });
+              if (tempRes && tempRes.ok) {
                 response = tempRes;
                 zipSuccessBranch = branch;
-                console.log(`[Explore] Tier 1 succeeded for branch: ${branch}`);
+                console.log(`[Explore] Authenticated Tier succeeded for branch: ${branch}`);
                 break;
               }
+            } catch (errAuth) {
+              console.warn(`[Explore] Authenticated Tier zip failed for branch ${branch}:`, errAuth);
             }
-          } catch (err1) {
-            console.warn(`[Explore] Tier 1 same-origin zip failed for branch ${branch}:`, err1);
+          }
+        }
+
+        // TIER 1: Same-Origin Serverless Rewrite / Dev Proxy (Fastest & CORS-Free)
+        if (!response || !response.ok) {
+          for (const branch of branchesToTry) {
+            try {
+              console.log(`[Explore] Tier 1: Fetching zip archive via same-origin rewrite for branch: ${branch}`);
+              const zipUrl = `/api/github-zip/${owner}/${repo}/${branch}`;
+              const tempRes = await fetchWithProgress(zipUrl, updateDownloadProgress);
+              if (tempRes && tempRes.ok) {
+                const contentType = tempRes.headers.get("content-type") || "";
+                if (!contentType.includes("text/html") && !contentType.includes("application/json")) {
+                  response = tempRes;
+                  zipSuccessBranch = branch;
+                  console.log(`[Explore] Tier 1 succeeded for branch: ${branch}`);
+                  break;
+                }
+              }
+            } catch (err1) {
+              console.warn(`[Explore] Tier 1 same-origin zip failed for branch ${branch}:`, err1);
+            }
           }
         }
 
@@ -491,6 +537,10 @@ const Explore = () => {
               if (metaData && Array.isArray(metaData.files)) {
                 filesList = flattenJSDelivrTree(metaData.files);
                 cdnSuccessBranch = branch;
+                if (metaData.version) {
+                  latestCommitSha = metaData.version;
+                  console.log(`[Explore] jsDelivr resolved version/commit: ${latestCommitSha}`);
+                }
                 console.log(`[Explore] Successfully resolved ${filesList.length} files from jsDelivr API (@${branch}).`);
                 break;
               }
@@ -506,7 +556,7 @@ const Explore = () => {
           for (const branch of branchesToTry) {
             try {
               console.log(`[Explore] Fallback Tier 2: Fetching structure for branch @${branch} from GitHub REST API...`);
-              const treeResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=true`);
+              const treeResponse = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=true`, { headers: getGithubHeaders() });
               if (treeResponse.ok) {
                 const treeData = await treeResponse.json();
                 if (treeData && Array.isArray(treeData.tree)) {
@@ -561,7 +611,7 @@ const Explore = () => {
               } catch (err) {
                 try {
                   const fallbackUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${cdnSuccessBranch}/${file.path}`;
-                  const fileRes = await fetch(fallbackUrl);
+                  const fileRes = await fetch(fallbackUrl, { headers: getGithubHeaders() });
                   if (!fileRes.ok) throw new Error(`Status ${fileRes.status}`);
                   const content = await fileRes.text();
                   files.push({ path: file.path, content });
@@ -607,7 +657,17 @@ const Explore = () => {
         setProgressValue(100);
         await new Promise((r) => setTimeout(r, 450));
         
-        const finalGraphData = { ...graphData, fileContents };
+        const finalGraphData = {
+          ...graphData,
+          fileContents,
+          metadata: {
+            repo: `${owner}/${repo}`,
+            version: latestCommitSha ? (latestCommitSha.length === 40 && /^[0-9a-fA-F]+$/.test(latestCommitSha) ? latestCommitSha.substring(0, 7) : latestCommitSha) : "1.0.0",
+            commit: latestCommitSha || "",
+            timestamp: new Date().toISOString(),
+            generator: "CodeGraphContext-Web-WASM"
+          }
+        };
         setGraphData(finalGraphData);
         
         // Cache the newly indexed graph data to IndexedDB
@@ -637,7 +697,8 @@ const Explore = () => {
       setLoading(true);
       setError(null);
       try {
-        setProgressText("Downloading bundle...");
+        const isBase64 = bundleUrl.endsWith('.base64') || bundleUrl.endsWith('.txt');
+        setProgressText(isBase64 ? "Downloading and decoding bundle..." : "Downloading bundle...");
         setProgressValue(5);
         
         const response = await fetchWithFallbackProxies(bundleUrl, (loaded, total) => {
@@ -655,9 +716,25 @@ const Explore = () => {
           throw new Error(`Failed to fetch bundle from URL (${response.status})`);
         }
         
-        setProgressText("Unzipping bundle in-memory...");
+        setProgressText(isBase64 ? "Decoding bundle data..." : "Unzipping bundle in-memory...");
         setProgressValue(55);
-        const buffer = await response.arrayBuffer();
+        
+        let buffer: ArrayBuffer;
+        if (isBase64) {
+          const base64Text = await response.text();
+          const binaryString = atob(base64Text.trim());
+          const len = binaryString.length;
+          const bytes = new Uint8Array(len);
+          for (let i = 0; i < len; i++) {
+            bytes[i] = binaryString.charCodeAt(i);
+          }
+          buffer = bytes.buffer;
+        } else {
+          buffer = await response.arrayBuffer();
+        }
+        
+        setProgressText("Unzipping bundle in-memory...");
+        setProgressValue(60);
         const jszip = await JSZip.loadAsync(buffer);
         
         const nodesFile = jszip.file("nodes.jsonl");
@@ -915,10 +992,55 @@ const Explore = () => {
 
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-background px-6 text-center">
-        <h1 className="text-2xl font-bold mb-2 text-red-500">Connection Error</h1>
-        <p className="text-muted-foreground max-w-md mb-8">{error}</p>
-        <button onClick={() => window.location.reload()} className="bg-primary text-primary-foreground px-6 py-2 rounded-lg">Retry</button>
+      <div className="min-h-screen flex flex-col items-center justify-center bg-[#050507] px-6 text-center text-white">
+        <div className="w-full max-w-md p-8 rounded-3xl border border-zinc-800 bg-zinc-950/80 backdrop-blur-xl shadow-2xl relative">
+          <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-red-500 to-rose-600" />
+          
+          <h1 className="text-2xl font-bold mb-3 text-red-500 tracking-tight">Access or Loading Error</h1>
+          <p className="text-zinc-400 text-sm max-w-md mb-6 leading-relaxed">{error}</p>
+          
+          {(owner && repo) && (
+            <div className="mb-6 p-4 rounded-2xl bg-zinc-900 border border-zinc-800 text-left">
+              <label className="text-[10px] font-bold uppercase tracking-wider text-zinc-400 block mb-2">
+                Private Repository? Access Token (PAT)
+              </label>
+              <input
+                type="password"
+                placeholder="ghp_..."
+                defaultValue={localStorage.getItem('github_pat') || ""}
+                onChange={(e) => {
+                  const val = e.target.value.trim();
+                  if (val) {
+                    localStorage.setItem('github_pat', val);
+                  } else {
+                    localStorage.removeItem('github_pat');
+                  }
+                }}
+                className="w-full bg-black border border-zinc-850 rounded-xl px-3.5 py-2 text-sm text-white placeholder-zinc-700 focus:outline-none focus:ring-1 focus:ring-red-500/50 focus:border-zinc-700 transition-all"
+              />
+              <p className="text-[10px] text-zinc-500 mt-2 leading-normal">
+                If the repository is private, dynamic auto-indexing requires a GitHub Personal Access Token with read/repo scopes.
+              </p>
+            </div>
+          )}
+          
+          <div className="flex gap-3">
+            <button
+              onClick={() => {
+                window.location.href = '/explore';
+              }}
+              className="w-full bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-white py-2.5 rounded-xl font-medium transition-colors text-sm"
+            >
+              Go to Explore
+            </button>
+            <button 
+              onClick={() => window.location.reload()} 
+              className="w-full bg-red-600 hover:bg-red-700 text-white py-2.5 rounded-xl font-medium transition-colors text-sm shadow-lg shadow-red-600/20"
+            >
+              Retry
+            </button>
+          </div>
+        </div>
       </div>
     );
   }

@@ -15,6 +15,10 @@ on:
         description: 'Repository Name (auto-filled by API)'
         required: false
         type: string
+      email:
+        description: 'Email Address for notifications (auto-filled by API)'
+        required: false
+        type: string
 
 permissions:
   contents: write  # Required to create/update releases
@@ -224,6 +228,31 @@ jobs:
           files: manifest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Send completion notification email
+        if: ${{ github.event.inputs.email != '' }}
+        continue-on-error: true
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          username: ${{ secrets.MAIL_USERNAME }}
+          password: ${{ secrets.MAIL_PASSWORD }}
+          subject: "🎉 CGC Bundle Ready: ${{ steps.parse-url.outputs.owner }}/${{ steps.parse-url.outputs.repo }}"
+          to: ${{ github.event.inputs.email }}
+          from: CodeGraphContext <noreply@yourdomain.com>
+          body: |
+            Your code graph index is ready!
+            
+            Repository: ${{ steps.parse-url.outputs.owner }}/${{ steps.parse-url.outputs.repo }}
+            Bundle: ${{ steps.export.outputs.bundle_name }}
+            Size: ${{ steps.export.outputs.bundle_size }}
+            
+            You can load this bundle into your local CodeGraphContext CLI database using:
+            
+            cgc load ${{ steps.export.outputs.bundle_name }}
+            
+            Or view it directly online in the explorer.
       
       - name: Summary
         run: |

@@ -34,7 +34,7 @@ const App: React.FC = () => {
         <ThemeProvider
           attribute="class"
           defaultTheme="dark"
-          enableSystem
+          enableSystem={false}
           disableTransitionOnChange
         >
           <TooltipProvider>

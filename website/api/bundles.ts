@@ -10,28 +10,47 @@ export default async function handler(req: any, res: any) {
 
         const allBundles: any[] = [];
 
-        // 1. Fetch on-demand bundles from manifest
+        // 1. Fetch community bundles from Hugging Face manifest
         try {
-            const manifestResponse = await fetch(
-                `https://github.com/${org}/${repo}/releases/download/on-demand-bundles/manifest.json`,
-                { headers: { 'Accept': 'application/json' } }
-            );
+            const hfRepo = process.env.HF_REGISTRY_REPO || 'codegraphcontext/bundles';
+            const manifestUrl = `https://huggingface.co/datasets/${hfRepo}/raw/main/manifest.json`;
+            const manifestResponse = await fetch(manifestUrl);
 
             if (manifestResponse.ok) {
                 const manifest = await manifestResponse.json();
                 if (manifest.bundles && Array.isArray(manifest.bundles)) {
                     allBundles.push(...manifest.bundles.map((b: any) => ({
                         ...b,
-                        category: 'On-Demand',
-                        source: 'on-demand'
+                        category: 'Community',
+                        source: 'community'
                     })));
                 }
             }
         } catch (err) {
-            console.log('No on-demand manifest found:', err);
+            console.log('No community manifest found on Hugging Face:', err);
         }
 
-        // 2. Fetch weekly pre-indexed bundles
+        // 1.5. Fetch server-indexed bundles from GitHub Releases manifest
+        try {
+            const serverManifestUrl = `https://github.com/${org}/${repo}/releases/download/on-demand-bundles/manifest.json`;
+            const serverManifestResponse = await fetch(serverManifestUrl);
+
+            if (serverManifestResponse.ok) {
+                const manifest = await serverManifestResponse.json();
+                if (manifest.bundles && Array.isArray(manifest.bundles)) {
+                    allBundles.push(...manifest.bundles.map((b: any) => ({
+                        ...b,
+                        name: b.repo ? b.repo.split('/')[1] : b.name || 'unknown',
+                        category: 'Server',
+                        source: 'server-indexed'
+                    })));
+                }
+            }
+        } catch (err) {
+            console.log('No server-indexed manifest found on GitHub Releases:', err);
+        }
+
+        // 2. Fetch weekly pre-indexed bundles (trending)
         try {
             const releasesResponse = await fetch(
                 `https://api.github.com/repos/${org}/${repo}/releases`,
@@ -78,7 +97,7 @@ export default async function handler(req: any, res: any) {
                                 category: getCategoryForRepo(name),
                                 description: getDescriptionForRepo(name),
                                 stars: getStarsForRepo(name),
-                                source: 'weekly'
+                                source: 'trending'
                             };
                         });
 
