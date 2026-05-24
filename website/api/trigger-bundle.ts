@@ -56,6 +56,7 @@ export default async function handler(req: any, res: any) {
 
     const rawRepoUrl = req.body.repoUrl;
     const repoUrl = rawRepoUrl ? rawRepoUrl.trim() : rawRepoUrl;
+    const email = req.body.email ? req.body.email.trim() : '';
 
     // Validate input
     if (!repoUrl) {
@@ -162,7 +163,8 @@ export default async function handler(req: any, res: any) {
                     inputs: {
                         repo_url: repoUrl,
                         repo_owner: owner,
-                        repo_name: repo
+                        repo_name: repo,
+                        email: email
                     }
                 })
             }
@@ -204,15 +206,20 @@ export default async function handler(req: any, res: any) {
             }
         }
 
+        console.log(`Triggered bundle build for repo: ${owner}/${repo} with email notification: ${email || 'none'}`);
+
         return res.status(202).json({
             status: 'triggered',
-            message: 'Bundle generation started',
+            message: email 
+                ? `Bundle generation started. We will email you at ${email} once completed!`
+                : 'Bundle generation started',
             repository: `${owner}/${repo}`,
             repo_size_mb: sizeInMB.toFixed(2),
             estimated_time: '5-10 minutes',
             run_id: runId,
             run_url: runUrl,
-            status_url: `/api/bundle-status?repo=${owner}/${repo}`
+            status_url: `/api/bundle-status?repo=${owner}/${repo}`,
+            email_registered: !!email
         });
 
     } catch (err: any) {

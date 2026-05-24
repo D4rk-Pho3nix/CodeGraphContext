@@ -2,17 +2,21 @@ import ForceGraph2D from "react-force-graph-2d";
 import ForceGraph3D from "react-force-graph-3d";
 import * as THREE from "three";
 import { useCallback, useRef, useState, useEffect, useMemo } from "react";
+import { useParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import {
   ArrowLeft, ZoomIn, ZoomOut, Maximize, FileCode, Search,
   Eye, EyeOff, Settings2, Palette, Star,
   ChevronRight, ChevronDown, Folder, FolderOpen,
   PanelLeftClose, PanelLeftOpen,
-  Layers, Check, X, Code2, Sun, Moon, ChevronUp, Route
+  Layers, Check, X, Code2, Sun, Moon, ChevronUp, Route,
+  Download, UploadCloud, Menu
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "next-themes";
 import FlowchartSVG from "./FlowchartSVG";
+import { packageCgcBundle, downloadBlob, publishCgcBundle } from "../lib/cgc-exporter";
+import { toast } from "sonner";
 
 const PALETTE = {
   dark: {
@@ -353,6 +357,58 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [focusSet, setFocusSet] = useState<{ nodes: Set<number>, links: Set<any> } | null>(null);
 
+  // Publish and Export parameters
+  const { owner, repo } = useParams();
+  const defaultRepoName = data.metadata?.repo || (owner && repo ? `${owner}/${repo}` : "");
+  const [showPublishModal, setShowPublishModal] = useState(false);
+  const [publishRepo, setPublishRepo] = useState("");
+  const [publishVersion, setPublishVersion] = useState("1.0.0");
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [showMobileMenu, setShowMobileMenu] = useState(false);
+
+  const handleExport = async () => {
+    try {
+      const repoName = data.metadata?.repo || "unknown/code-graph";
+      const owner = repoName.includes('/') ? repoName.split('/')[0] : "unknown";
+      const repo = repoName.includes('/') ? repoName.split('/')[1] : repoName;
+      const branch = "main";
+      const commit = data.metadata?.commit || data.metadata?.version || "latest";
+      const cleanCommit = commit.length === 40 && /^[0-9a-fA-F]+$/.test(commit) ? commit.substring(0, 7) : commit;
+      const filename = `cgc__${owner}__${repo}__${branch}__${cleanCommit}.cgc`;
+      
+      const blob = await packageCgcBundle(repoName, data.nodes, data.links);
+      downloadBlob(blob, filename);
+      toast.success("CGC bundle exported successfully!");
+    } catch (err: any) {
+      console.error(err);
+      toast.error("Failed to export bundle: " + err.message);
+    }
+  };
+
+  const handlePublishSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!publishRepo || !publishRepo.includes("/")) {
+      toast.error("Invalid repository name. Expected 'owner/repo' format.");
+      return;
+    }
+    setIsPublishing(true);
+    try {
+      const blob = await packageCgcBundle(publishRepo, data.nodes, data.links, publishVersion);
+      const result = await publishCgcBundle(blob, publishRepo, publishVersion);
+      if (result.success) {
+        toast.success(`Successfully published ${publishRepo} (v${publishVersion}) to the registry!`);
+        setShowPublishModal(false);
+      } else {
+        toast.error(result.message || "Failed to publish bundle.");
+      }
+    } catch (err: any) {
+      console.error(err);
+      toast.error(err.message || "An error occurred during publishing.");
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
   // Path traversal states
   const [isPathMode, setIsPathMode] = useState(false);
   const [pathSource, setPathSource] = useState<any>(null);
@@ -371,7 +427,7 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
   const codeBodyRef = useRef<HTMLDivElement>(null);
 
   // Legend collapsible state
-  const [legendCollapsed, setLegendCollapsed] = useState(false);
+  const [legendCollapsed, setLegendCollapsed] = useState(() => window.innerWidth < 1024);
 
   const fileContents: Record<string, string> = data.fileContents || {};
 
@@ -399,10 +455,19 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
   const resizeStartW = useRef(DEFAULT_SIDEBAR_W);
 
   useEffect(() => {
-    const handleResize = () => setDimensions({
-      width: window.innerWidth,
-      height: window.innerHeight
-    });
+    const handleResize = () => {
+      const w = window.innerWidth;
+      setDimensions({
+        width: w,
+        height: window.innerHeight
+      });
+      if (w < 1024) {
+        setLegendCollapsed(true);
+      }
+      if (w < 768) {
+        setCollapsed(true);
+      }
+    };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
@@ -1148,12 +1213,12 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
               {/* Header */}
               <div className="px-4 pt-4 pb-2 flex-shrink-0">
                 <Button
-                  onClick={onClose}
+                  onClick={() => window.location.href = "/"}
                   variant="ghost"
                   className={`w-full justify-start mb-4 rounded-xl transition-colors text-sm ${isDark ? 'text-gray-400 hover:text-white hover:bg-white/5 border border-white/5' : 'text-gray-600 hover:text-black hover:bg-black/5 border border-black/10'}`}
                 >
-                  <ArrowLeft className="w-4 h-4 mr-2" />
-                  Back to Dashboard
+                  <X className="w-4 h-4 mr-2 text-red-400" />
+                  Exit to Homepage
                 </Button>
 
                 <div className="flex items-center justify-between mb-3">
@@ -1377,8 +1442,8 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
       <div className={`flex-1 relative overflow-hidden ${isDark ? 'bg-[radial-gradient(circle_at_center,_#0a0a0a_0%,_#000_100%)]' : 'bg-[radial-gradient(circle_at_center,_#f0f0f2_0%,_#e8e8ec_100%)]'}`}>
 
         {/* Top Right Badges */}
-        <div className="absolute top-6 right-6 z-[60] flex flex-col md:flex-row items-end md:items-center gap-3">
-          {/* Theme Toggle */}
+        <div className="absolute top-6 right-6 z-[60] flex items-center gap-2">
+          {/* Theme Toggle (Always Visible) */}
           <button
             onClick={() => setTheme(isDark ? 'light' : 'dark')}
             className={`flex items-center justify-center w-9 h-9 rounded-full border backdrop-blur-md shadow-2xl transition-all ${isDark ? 'bg-black/40 hover:bg-white/10 border-white/10 text-yellow-300' : 'bg-white/80 hover:bg-white border-black/10 text-gray-700'}`}
@@ -1387,64 +1452,174 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
             {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
 
-          {/* Mode Selector Dropdown */}
-          <div ref={modeMenuRef} className="relative">
+          {/* Desktop Top Right Badges */}
+          <div className="hidden md:flex items-center gap-3">
+            {/* Export Button */}
             <button
-              onClick={() => setShowModeMenu(v => !v)}
+              onClick={handleExport}
               className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full transition-all backdrop-blur-md shadow-2xl cursor-pointer ${isDark ? 'bg-black/40 hover:bg-white/10 text-white border-white/10' : 'bg-white/80 hover:bg-white text-gray-800 border-black/10'}`}
+              title="Download code graph as a .cgc file"
             >
-              <Layers className="w-3.5 h-3.5 text-purple-400" />
-              {VISUALIZATION_MODES.find(m => m.id === graphMode)?.name}
-              <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${showModeMenu ? 'rotate-180' : ''}`} />
+              <Download className="w-3.5 h-3.5 text-blue-400" />
+              Export
             </button>
-            <AnimatePresence>
-              {showModeMenu && (
-                <motion.div
-                  initial={{ opacity: 0, y: -8, scale: 0.96 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: -8, scale: 0.96 }}
-                  transition={{ duration: 0.15 }}
-                  className={`absolute right-0 top-full mt-2 backdrop-blur-xl border rounded-2xl shadow-2xl overflow-hidden min-w-[280px] py-1.5 z-[100] ${isDark ? 'bg-black/90 border-white/10' : 'bg-white/95 border-black/10'}`}
-                >
-                  {VISUALIZATION_MODES.map(mode => (
-                    <button
-                      key={mode.id}
-                      onClick={() => { setGraphMode(mode.id); setShowModeMenu(false); }}
-                      className={`w-full flex items-center gap-3 px-4 py-2.5 transition-all cursor-pointer ${graphMode === mode.id
-                          ? (isDark ? 'bg-white/10 text-white' : 'bg-black/10 text-black')
-                          : (isDark ? 'text-gray-400 hover:text-white hover:bg-white/5' : 'text-gray-500 hover:text-black hover:bg-black/5')
-                        }`}
-                    >
-                      <div
-                        className="w-3 h-3 rounded-full flex-shrink-0"
-                        style={{ backgroundColor: mode.previewColor, boxShadow: `0 0 8px ${mode.previewColor}` }}
-                      />
-                      <div className="text-left flex-1 min-w-0">
-                        <div className="text-[12px] font-bold tracking-wide">{mode.name}</div>
-                        <div className="text-[10px] text-gray-500">{mode.description}</div>
-                      </div>
-                      {graphMode === mode.id && (
-                        <Check className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
-                      )}
-                    </button>
-                  ))}
-                </motion.div>
-              )}
-            </AnimatePresence>
+
+            {/* Publish Button */}
+            <button
+              onClick={() => {
+                setPublishRepo(defaultRepoName);
+                setPublishVersion(data.metadata?.version || "1.0.0");
+                setShowPublishModal(true);
+              }}
+              className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full transition-all backdrop-blur-md shadow-2xl cursor-pointer ${isDark ? 'bg-black/40 hover:bg-white/10 text-white border-white/10' : 'bg-white/80 hover:bg-white text-gray-800 border-black/10'}`}
+              title="Publish this graph to the public registry"
+            >
+              <UploadCloud className="w-3.5 h-3.5 text-green-400" />
+              Publish
+            </button>
+
+            {/* Mode Selector Dropdown */}
+            <div ref={modeMenuRef} className="relative">
+              <button
+                onClick={() => setShowModeMenu(v => !v)}
+                className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full transition-all backdrop-blur-md shadow-2xl cursor-pointer ${isDark ? 'bg-black/40 hover:bg-white/10 text-white border-white/10' : 'bg-white/80 hover:bg-white text-gray-800 border-black/10'}`}
+              >
+                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                {VISUALIZATION_MODES.find(m => m.id === graphMode)?.name}
+                <ChevronDown className={`w-3 h-3 text-gray-400 transition-transform ${showModeMenu ? 'rotate-180' : ''}`} />
+              </button>
+              <AnimatePresence>
+                {showModeMenu && (
+                  <motion.div
+                    initial={{ opacity: 0, y: -8, scale: 0.96 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.96 }}
+                    transition={{ duration: 0.15 }}
+                    className={`absolute right-0 top-full mt-2 backdrop-blur-xl border rounded-2xl shadow-2xl overflow-hidden min-w-[280px] py-1.5 z-[100] ${isDark ? 'bg-black/90 border-white/10' : 'bg-white/95 border-black/10'}`}
+                  >
+                    {VISUALIZATION_MODES.map(mode => (
+                      <button
+                        key={mode.id}
+                        onClick={() => { setGraphMode(mode.id); setShowModeMenu(false); }}
+                        className={`w-full flex items-center gap-3 px-4 py-2.5 transition-all cursor-pointer ${graphMode === mode.id
+                            ? (isDark ? 'bg-white/10 text-white' : 'bg-black/10 text-black')
+                            : (isDark ? 'text-gray-400 hover:text-white hover:bg-white/5' : 'text-gray-500 hover:text-black hover:bg-black/5')
+                          }`}
+                      >
+                        <div
+                          className="w-3 h-3 rounded-full flex-shrink-0"
+                          style={{ backgroundColor: mode.previewColor, boxShadow: `0 0 8px ${mode.previewColor}` }}
+                        />
+                        <div className="text-left flex-1 min-w-0">
+                          <div className="text-[12px] font-bold tracking-wide">{mode.name}</div>
+                          <div className="text-[10px] text-gray-500">{mode.description}</div>
+                        </div>
+                        {graphMode === mode.id && (
+                          <Check className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" />
+                        )}
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+
+            <a
+              href="https://github.com/CodeGraphContext/CodeGraphContext"
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full transition-all backdrop-blur-md shadow-2xl ${isDark ? 'bg-black/40 hover:bg-white/10 text-white border-white/10' : 'bg-white/80 hover:bg-white text-gray-800 border-black/10'}`}
+            >
+              <Star className="w-3.5 h-3.5 text-yellow-400 fill-yellow-400" />
+              Star on GitHub
+            </a>
+            <div className={`text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full backdrop-blur-md shadow-2xl ${isDark ? 'bg-black/40 text-gray-400 border-white/10' : 'bg-white/80 text-gray-500 border-black/10'}`}>
+              Made by <a href="https://github.com/shashankss1205" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition-colors">shashankss1205</a>
+            </div>
           </div>
 
-          <a
-            href="https://github.com/CodeGraphContext/CodeGraphContext"
-            target="_blank"
-            rel="noopener noreferrer"
-            className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full transition-all backdrop-blur-md shadow-2xl ${isDark ? 'bg-black/40 hover:bg-white/10 text-white border-white/10' : 'bg-white/80 hover:bg-white text-gray-800 border-black/10'}`}
+          {/* Mobile Hamburger Menu Toggle */}
+          <button
+            onClick={() => setShowMobileMenu(prev => !prev)}
+            className={`md:hidden flex items-center justify-center w-9 h-9 rounded-full border backdrop-blur-md shadow-2xl transition-all ${isDark ? 'bg-black/40 hover:bg-white/10 border-white/10 text-white' : 'bg-white/80 hover:bg-white border-black/10 text-gray-700'}`}
+            title="Toggle Menu"
           >
-            <Star className="w-3.5 h-3.5 text-yellow-400 fill-yellow-400" />
-            Star on GitHub
-          </a>
-          <div className={`text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full backdrop-blur-md shadow-2xl ${isDark ? 'bg-black/40 text-gray-400 border-white/10' : 'bg-white/80 text-gray-500 border-black/10'}`}>
-            Made by <a href="https://github.com/shashankss1205" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 transition-colors">shashankss1205</a>
-          </div>
+            {showMobileMenu ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
+          </button>
+
+          {/* Mobile Dropdown Panel */}
+          <AnimatePresence>
+            {showMobileMenu && (
+              <motion.div
+                initial={{ opacity: 0, y: -10, scale: 0.95 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: -10, scale: 0.95 }}
+                transition={{ duration: 0.15 }}
+                className={`absolute right-0 top-full mt-2 backdrop-blur-2xl border rounded-2xl shadow-2xl overflow-hidden min-w-[200px] p-3 z-[100] flex flex-col gap-2.5 ${isDark ? 'bg-black/90 border-white/10' : 'bg-white/95 border-black/10'}`}
+              >
+                {/* Mobile Export */}
+                <button
+                  onClick={() => { handleExport(); setShowMobileMenu(false); }}
+                  className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-xl transition-all cursor-pointer text-left w-full ${isDark ? 'hover:bg-white/5 border-white/5 text-white' : 'hover:bg-black/5 border-black/5 text-gray-800'}`}
+                >
+                  <Download className="w-3.5 h-3.5 text-blue-400" />
+                  Export CGC
+                </button>
+
+                {/* Mobile Publish */}
+                <button
+                  onClick={() => {
+                    setPublishRepo(defaultRepoName);
+                    setPublishVersion(data.metadata?.version || "1.0.0");
+                    setShowPublishModal(true);
+                    setShowMobileMenu(false);
+                  }}
+                  className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-xl transition-all cursor-pointer text-left w-full ${isDark ? 'hover:bg-white/5 border-white/5 text-white' : 'hover:bg-black/5 border-black/5 text-gray-800'}`}
+                >
+                  <UploadCloud className="w-3.5 h-3.5 text-green-400" />
+                  Publish Graph
+                </button>
+
+                {/* Mobile Mode Selector */}
+                <div className="border-t border-white/5 my-0.5" />
+                <div className="px-2 text-[8px] uppercase tracking-widest font-bold text-gray-500">Visualization Mode</div>
+                {VISUALIZATION_MODES.map(mode => (
+                  <button
+                    key={mode.id}
+                    onClick={() => { setGraphMode(mode.id); setShowMobileMenu(false); }}
+                    className={`flex items-center gap-3 px-3 py-1.5 rounded-lg transition-all text-left cursor-pointer ${graphMode === mode.id
+                        ? (isDark ? 'bg-white/10 text-white' : 'bg-black/10 text-black')
+                        : (isDark ? 'text-gray-400 hover:text-white hover:bg-white/5' : 'text-gray-500 hover:text-black hover:bg-black/5')
+                      }`}
+                  >
+                    <div
+                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: mode.previewColor }}
+                    />
+                    <span className="text-[10px] font-bold uppercase tracking-wider">{mode.name}</span>
+                  </button>
+                ))}
+
+                {/* Mobile Star */}
+                <div className="border-t border-white/5 my-0.5" />
+                <a
+                  href="https://github.com/CodeGraphContext/CodeGraphContext"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-xl transition-all ${isDark ? 'hover:bg-white/5 border-white/5 text-white' : 'hover:bg-black/5 border-black/5 text-gray-850'}`}
+                  onClick={() => setShowMobileMenu(false)}
+                >
+                  <Star className="w-3.5 h-3.5 text-yellow-400 fill-yellow-400" />
+                  Star on GitHub
+                </a>
+
+                {/* Mobile Made By */}
+                <div className="text-[9px] uppercase tracking-widest text-center mt-1 text-gray-500 py-1 border-t border-white/5">
+                  Made by <a href="https://github.com/shashankss1205" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300 font-bold transition-colors">shashankss1205</a>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
 
         {/* Zoom Controls */}
@@ -1781,6 +1956,121 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
               </div>
             </motion.div>
           </>
+        )}
+      </AnimatePresence>
+
+      {/* ── PUBLISH MODAL ── */}
+      <AnimatePresence>
+        {showPublishModal && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4">
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => !isPublishing && setShowPublishModal(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-md"
+            />
+
+            {/* Dialog Panel */}
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className={`relative w-full max-w-md p-6 rounded-3xl shadow-2xl border backdrop-blur-2xl overflow-hidden ${
+                isDark 
+                  ? "bg-zinc-950/80 border-zinc-800 text-white" 
+                  : "bg-white/90 border-zinc-200 text-zinc-900"
+              }`}
+            >
+              {/* Subtle top glow bar */}
+              <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-500 via-indigo-500 to-purple-500" />
+
+              <div className="flex justify-between items-start mb-6">
+                <div>
+                  <h3 className="text-lg font-bold tracking-tight">Publish Code Graph</h3>
+                  <p className={`text-xs mt-1 ${isDark ? "text-zinc-400" : "text-zinc-500"}`}>
+                    Register this bundle in the public search index.
+                  </p>
+                </div>
+                <button
+                  disabled={isPublishing}
+                  onClick={() => setShowPublishModal(false)}
+                  className={`p-1.5 rounded-full transition-colors ${
+                    isDark ? "hover:bg-white/10 text-zinc-400 hover:text-white" : "hover:bg-zinc-100 text-zinc-500 hover:text-zinc-950"
+                  }`}
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handlePublishSubmit} className="space-y-4">
+                <div className="space-y-1.5">
+                  <label className="text-[10px] uppercase font-bold tracking-wider text-zinc-400 block">
+                    GitHub Repository
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    disabled={isPublishing}
+                    value={publishRepo}
+                    onChange={(e) => setPublishRepo(e.target.value)}
+                    placeholder="e.g. owner/repository"
+                    className={`w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all ${
+                      isDark 
+                        ? "bg-zinc-900 border-zinc-800 text-white placeholder-zinc-600 focus:border-zinc-700" 
+                        : "bg-zinc-50 border-zinc-200 text-zinc-950 placeholder-zinc-400 focus:border-zinc-300"
+                    }`}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[10px] uppercase font-bold tracking-wider text-zinc-400 block">
+                    Version
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    disabled={isPublishing}
+                    value={publishVersion}
+                    onChange={(e) => setPublishVersion(e.target.value)}
+                    placeholder="e.g. 1.0.0"
+                    className={`w-full px-3 py-2 text-sm rounded-xl border focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all ${
+                      isDark 
+                        ? "bg-zinc-900 border-zinc-800 text-white placeholder-zinc-600 focus:border-zinc-700" 
+                        : "bg-zinc-50 border-zinc-200 text-zinc-950 placeholder-zinc-400 focus:border-zinc-300"
+                    }`}
+                  />
+                </div>
+
+                <div className="pt-4 flex gap-3">
+                  <Button
+                    type="button"
+                    disabled={isPublishing}
+                    variant="outline"
+                    onClick={() => setShowPublishModal(false)}
+                    className="w-full rounded-xl"
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={isPublishing}
+                    className="w-full rounded-xl bg-gradient-to-r from-blue-500 to-indigo-600 text-white hover:from-blue-600 hover:to-indigo-700 shadow-lg shadow-indigo-500/20"
+                  >
+                    {isPublishing ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Publishing...
+                      </span>
+                    ) : (
+                      "Publish"
+                    )}
+                  </Button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
     </motion.div>

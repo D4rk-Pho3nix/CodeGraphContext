@@ -2,16 +2,17 @@ import { useState } from "react";
 import { FolderUp, FileArchive, Github, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { parseFilesIntoGraph } from "@/lib/parser";
-import { parseFilesWithPyodide } from "@/lib/parser-pyodide";
+
 import JSZip from "jszip";
 import { motion } from "framer-motion";
+import { useNavigate } from "react-router-dom";
 
 const IGNORED_DIRS = new Set([
   'node_modules', '.git', '.github', 'dist', 'build', 'out', 'coverage', 
   '.next', '.nuxt', '__pycache__', 'venv', '.venv', 'env', '.env', '.tox',
   'eggs', 'target', '.gradle', '.idea', 'cmake-build-debug', 'bin', 'obj',
   'packages', 'vendor', 'Pods', '.build', 'DerivedData', '.dart_tool',
-  '.vscode', 'test', 'tests', '__tests__', 'spec', 'specs'
+  '.vscode'
 ]);
 
 const sanitizePath = (pathStr: string, repoName?: string): string => {
@@ -78,15 +79,17 @@ const fetchWithFallbackProxies = async (url: string): Promise<Response> => {
   throw lastError || new Error("Failed to fetch via proxies");
 };
 
-export default function LocalUploader({ onComplete }: { onComplete: (data: unknown) => void }) {
+export default function LocalUploader({ onComplete, plain }: { onComplete: (data: unknown) => void, plain?: boolean }) {
+  const navigate = useNavigate();
   const [isParsing, setIsParsing] = useState(false);
   const [progress, setProgress] = useState({ text: "", value: 0 });
-  const [activeTab, setActiveTab] = useState<'folder' | 'zip' | 'cgc' | 'github'>('folder');
+  const [activeTab, setActiveTab] = useState<'folder' | 'zip' | 'cgc' | 'github'>('github');
   const [githubUrl, setGithubUrl] = useState("");
+  const [githubPat, setGithubPat] = useState(() => localStorage.getItem('github_pat') || "");
   const [indexVariables, setIndexVariables] = useState(false);
-  const [indexerMode, setIndexerMode] = useState<'fast' | 'deep'>('fast');
 
-  const processFiles = async (files: { path: string, content: string }[]) => {
+
+  const processFiles = async (files: { path: string, content: string }[], repoName: string = "local-project") => {
     // Build fileContents map before the worker clears content for memory
     const fileContents: Record<string, string> = {};
     for (const f of files) {
@@ -96,27 +99,25 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
     setProgress({ text: `Parsing AST for ${files.length} files...`, value: 50 });
     await new Promise(r => setTimeout(r, 800));
     
-    let graphData;
-    if (indexerMode === 'deep') {
-      setProgress({ text: "Initializing Python Engine...", value: 65 });
-      graphData = await parseFilesWithPyodide(
-        files, 
-        (msg, val) => setProgress({ text: msg, value: val }),
-        { indexVariables }
-      );
-    } else {
-      setProgress({ text: "Initializing WebAssembly tree-sitter...", value: 80 });
-      graphData = await parseFilesIntoGraph(
-        files, 
-        (msg, val) => setProgress({ text: msg, value: val }),
-        { indexVariables }
-      );
-    }
+    setProgress({ text: "Initializing WebAssembly tree-sitter...", value: 80 });
+    const graphData = await parseFilesIntoGraph(
+      files, 
+      (msg, val) => setProgress({ text: msg, value: val }),
+      { indexVariables }
+    );
     
     setProgress({ text: "Complete!", value: 100 });
     await new Promise(r => setTimeout(r, 400));
     
-    onComplete({ ...graphData, fileContents });
+    onComplete({
+      ...graphData,
+      fileContents,
+      metadata: {
+        repo: repoName,
+        version: "1.0.0",
+        timestamp: new Date().toISOString()
+      }
+    });
   };
 
   const handleFolderSelect = async () => {
@@ -142,7 +143,7 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
       }
       
       await readDir(dirHandle);
-      await processFiles(files);
+      await processFiles(files, dirHandle.name);
     } catch (err) {
       console.error(err);
       setIsParsing(false);
@@ -170,7 +171,7 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
       setProgress({ text: `Extracting ${promises.length} files...`, value: 30 });
       await Promise.all(promises);
       
-      await processFiles(files);
+      await processFiles(files, file.name.replace(/\.zip$/i, ""));
     } catch (err) {
       console.error(err);
       setIsParsing(false);
@@ -306,149 +307,40 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
   };
 
   const handleGithubFetch = async () => {
-    if (!githubUrl || !githubUrl.includes("github.com")) {
-      alert("Please enter a valid GitHub URL.");
+    const input = githubUrl.trim();
+    if (!input) {
+      alert("Please enter a GitHub URL or owner/repo.");
       return;
     }
     
-    setIsParsing(true);
-    setProgress({ text: "Fetching repository...", value: 10 });
+    let owner = "";
+    let repo = "";
     
-    let files: any[] = [];
-    
-    try {
-      // --- METHOD 1: ZIP ARCHIVE FLOW (PRIMARY & HIGHLY OPTIMIZED) ---
-      const match = githubUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
-      if (!match) throw new Error("Invalid GitHub URL");
-      const [_, owner, repo] = match;
-      
-      setProgress({ text: "Downloading repository zip archive (highly optimized)...", value: 15 });
-      
-      let response = null;
-
-      // TIER 1: Standard Web Archive ZIP via CORS Proxies
-      try {
-        console.log("[LocalUploader] Tier 1: Fetching standard web ZIP archive via proxies...");
-        const zipUrl = `https://github.com/${owner}/${repo}/archive/refs/heads/main.zip`;
-        response = await fetchWithFallbackProxies(zipUrl);
-        if (!response || !response.ok) throw new Error(`Status ${response?.status}`);
-      } catch (err1) {
-        console.warn("[LocalUploader] Tier 1 main.zip failed, trying master.zip...", err1);
-        try {
-          const fallbackZipUrl = `https://github.com/${owner}/${repo}/archive/refs/heads/master.zip`;
-          response = await fetchWithFallbackProxies(fallbackZipUrl);
-          if (!response || !response.ok) throw new Error(`Status ${response?.status}`);
-        } catch (err2) {
-          console.warn("[LocalUploader] Tier 1 master.zip failed as well.", err2);
-        }
+    if (input.includes("github.com")) {
+      const match = input.match(/github\.com\/([^/]+)\/([^/]+)/);
+      if (match) {
+        owner = match[1];
+        repo = match[2].replace(/\.git$/, "").split("/")[0];
       }
-
-      // TIER 2: If Tier 1 failed, fallback to REST API Zipball via CORS Proxies
-      if (!response || !response.ok) {
-        console.log("[LocalUploader] Tier 2: Falling back to REST API Zipball...");
-        try {
-          const apiZipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball/main`;
-          response = await fetchWithFallbackProxies(apiZipUrl);
-          if (!response || !response.ok) throw new Error(`Status ${response?.status}`);
-        } catch (err3) {
-          console.warn("[LocalUploader] Tier 2 main zipball failed, trying master zipball...", err3);
-          try {
-            const fallbackApiZipUrl = `https://api.github.com/repos/${owner}/${repo}/zipball/master`;
-            response = await fetchWithFallbackProxies(fallbackApiZipUrl);
-            if (!response || !response.ok) throw new Error(`Status ${response?.status}`);
-          } catch (err4) {
-            console.error("[LocalUploader] Tier 2 master zipball failed as well.", err4);
-            throw new Error("All ZIP download tiers failed.");
-          }
-        }
-      }
-
-      setProgress({ text: "Unzipping archive in-memory...", value: 35 });
-      const buffer = await response.arrayBuffer();
-      const jszip = await JSZip.loadAsync(buffer);
-      
-      const promises: Promise<void>[] = [];
-      
-      jszip.forEach((path, entry) => {
-        if (
-          !entry.dir && 
-          path.match(/\.(js|ts|jsx|tsx|py|c|h|cpp|hpp|cc|cs|go|rs|rb|php|swift|kt|kts|dart)$/) && 
-          !isPathIgnored(path)
-        ) {
-          promises.push(
-            entry.async("text").then((content) => {
-              // Strip the GitHub zipball root folder segment (e.g. "owner-repo-commitHash/")
-              const cleanPath = path.substring(path.indexOf("/") + 1);
-              files.push({ path: cleanPath, content });
-            })
-          );
-        }
-      });
-      
-      if (promises.length === 0) {
-        throw new Error("No parseable code files found in the repository.");
-      }
-      
-      setProgress({ text: `Extracting ${promises.length} files...`, value: 50 });
-      await Promise.all(promises);
-      
-      await processFiles(files);
-      
-    } catch (zipErr: any) {
-      console.warn("[ZIP Flow] Failed, falling back to CDN individual file downloads...", zipErr);
-      files = [];
-      
-      try {
-        const match = githubUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
-        if (!match) throw new Error("Invalid GitHub URL");
-        const [_, owner, repo] = match;
-        
-        setProgress({ text: "Fetching repository tree...", value: 10 });
-        const treeUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/main?recursive=1`;
-        let res = await fetch(treeUrl);
-        
-        // Fallback for master branch
-        if (!res.ok) {
-           const masterUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/master?recursive=1`;
-           res = await fetch(masterUrl);
-        }
-        
-        if (!res.ok) {
-          throw new Error("Could not fetch repo (make sure it's public).");
-        }
-        
-        const data = await res.json();
-        const filePaths = data.tree
-          .filter((t: any) => t.type === "blob")
-          .map((t: any) => t.path)
-          .filter((p: string) => p.match(/\.(js|ts|jsx|tsx|py|c|h|cpp|hpp|cc|cs|go|rs|rb|php|swift|kt|kts|dart)$/) && !isPathIgnored(p));
-          
-        setProgress({ text: `Downloading ${filePaths.length} files...`, value: 30 });
-        
-        // Batch loading to prevent excessive concurrency
-        for (let i = 0; i < filePaths.length; i += 10) {
-          setProgress({ text: `Downloading ${i}/${filePaths.length}...`, value: 30 + Math.floor((i/filePaths.length) * 20) });
-          const batch = filePaths.slice(i, i + 10);
-          await Promise.all(batch.map(async (p: string) => {
-             try {
-               let r = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/main/${p}`);
-               if (!r.ok) r = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/master/${p}`);
-               if (r.ok) files.push({ path: p, content: await r.text() });
-             } catch (e) { console.warn("Fetch failed", e); }
-           }));
-        }
-        
-        await processFiles(files);
-      } catch (err: any) {
-        console.error(err);
-        setIsParsing(false);
-        alert("Error: " + err.message);
+    } else {
+      const match = input.match(/^([^/]+)\/([^/]+)$/);
+      if (match) {
+        owner = match[1];
+        repo = match[2];
       }
     }
+    
+    if (!owner || !repo) {
+      alert("Please enter a valid GitHub repository (e.g. sktime/sktime-mcp or https://github.com/sktime/sktime-mcp).");
+      return;
+    }
+
+    // Redirect user to the optimized Direct Repo route
+    navigate(`/${owner}/${repo}`);
   };
 
   return (
-    <div className="flex flex-col p-6 w-full h-full min-h-[400px] border border-white/10 dark:border-white/20 rounded-[2rem] bg-black/40 backdrop-blur-xl shadow-2xl relative overflow-hidden">
+    <div className={plain ? "flex flex-col w-full h-full relative z-10" : "flex flex-col p-6 w-full h-full min-h-[400px] border border-white/10 dark:border-white/20 rounded-[2rem] bg-black/40 backdrop-blur-xl shadow-2xl relative overflow-hidden"}>
       
       {/* Tab Selectors */}
       <div className="grid grid-cols-2 sm:flex bg-white/5 p-1.5 rounded-2xl mb-6 relative z-10 w-full shadow-inner border border-white/5 gap-1.5 sm:gap-2">
@@ -458,46 +350,14 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
         <button onClick={() => setActiveTab('github')} className={`w-full sm:flex-1 py-2.5 px-3 text-xs sm:text-sm font-semibold rounded-xl transition-all duration-300 ${activeTab === 'github' ? 'bg-gradient-to-br from-purple-500 to-indigo-600 text-white shadow-lg' : 'text-gray-400 hover:text-white hover:bg-white/10'}`}>GitHub</button>
       </div>
 
-      {/* Indexer Mode Toggle Selector */}
-      {activeTab !== 'cgc' && (
-        <div className="flex flex-col bg-white/5 border border-white/10 rounded-2xl p-4 mb-6 relative z-10 w-full text-left gap-3 shadow-md">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-bold uppercase tracking-wider text-purple-400">
-              Select Indexer Engine
-            </span>
-            <span className="text-[10px] px-2.5 py-0.5 rounded-full font-mono bg-purple-500/20 text-purple-300 border border-purple-500/30 uppercase tracking-widest font-bold">
-              {indexerMode === 'fast' ? 'Instant' : 'Deep Semantic'}
-            </span>
-          </div>
-          
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <button 
-              onClick={() => setIndexerMode('fast')} 
-              className={`p-3 rounded-xl border text-left transition-all duration-300 flex flex-col gap-1 ${indexerMode === 'fast' ? 'bg-white/10 border-purple-500/50 text-white shadow-lg' : 'bg-transparent border-white/5 text-gray-400 hover:text-white hover:bg-white/5'}`}
-            >
-              <span className="text-xs font-bold">⚡ Fast Indexer (JS)</span>
-              <span className="text-[10px] opacity-75">Instant startup, great for quick structure scan.</span>
-            </button>
-            
-            <button 
-              onClick={() => setIndexerMode('deep')} 
-              className={`p-3 rounded-xl border text-left transition-all duration-300 flex flex-col gap-1 ${indexerMode === 'deep' ? 'bg-gradient-to-br from-purple-950/40 to-indigo-950/40 border-purple-500 text-white shadow-[0_0_15px_rgba(168,85,247,0.15)]' : 'bg-transparent border-white/5 text-gray-400 hover:text-white hover:bg-white/5'}`}
-            >
-              <span className="text-xs font-bold">🔮 Deep Indexer (Py)</span>
-              <span className="text-[10px] opacity-75">Resolves complex cross-file scopes, imports, and inherits.</span>
-            </button>
-          </div>
-        </div>
-      )}
+
 
       {!isParsing ? (
         <div className="flex flex-col items-center justify-center flex-1 text-center w-full relative z-10">
           
           {activeTab === 'folder' && (
             <motion.div key="folder" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center w-full">
-              <div className="bg-gradient-to-br from-purple-500/20 to-indigo-500/20 p-5 rounded-full mb-6 border border-purple-500/30">
-                <FolderUp className="w-10 h-10 text-purple-400" />
-              </div>
+
               <h3 className="text-2xl font-bold mb-2 text-white">Select Directory</h3>
               <p className="text-gray-400 text-sm mb-8 max-w-[250px]">Select a local folder. Visualized locally in the browser.</p>
               <Button onClick={handleFolderSelect} className="bg-white text-black hover:bg-gray-200 rounded-full px-10 py-6 text-lg w-full max-w-[280px] shadow-[0_0_20px_rgba(255,255,255,0.1)]">
@@ -508,9 +368,7 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
 
           {activeTab === 'zip' && (
             <motion.div key="zip" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center w-full">
-              <div className="bg-gradient-to-br from-blue-500/20 to-cyan-500/20 p-5 rounded-full mb-6 border border-blue-500/30">
-                <FileArchive className="w-10 h-10 text-blue-400" />
-              </div>
+
               <h3 className="text-2xl font-bold mb-2 text-white">Upload ZIP</h3>
               <p className="text-gray-400 text-sm mb-8 max-w-[250px]">Drop a compressed repository. Unzipped and parsed securely in memory.</p>
               <div className="relative w-full max-w-[280px]">
@@ -524,9 +382,7 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
 
           {activeTab === 'cgc' && (
             <motion.div key="cgc" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center w-full">
-              <div className="bg-gradient-to-br from-emerald-500/10 to-teal-500/10 p-4 rounded-full mb-6 border border-emerald-500/20">
-                <img src="/cgcIcon.png" alt="CGC Bundle Logo" className="w-12 h-12 shrink-0 drop-shadow-[0_0_8px_rgba(16,185,129,0.4)] animate-float" style={{ animationDuration: '3s' }} />
-              </div>
+
               <h3 className="text-2xl font-bold mb-2 text-white">Upload CGC Bundle</h3>
               <p className="text-gray-400 text-sm mb-8 max-w-[250px]">Drop a .cgc pre-indexed bundle file. Loaded instantly in-memory.</p>
               <div className="relative w-full max-w-[280px]">
@@ -540,18 +396,36 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
 
           {activeTab === 'github' && (
             <motion.div key="github" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col items-center w-full">
-              <div className="bg-gradient-to-br from-gray-600/30 to-gray-500/10 p-5 rounded-full mb-6 border border-gray-500/30">
-                <Github className="w-10 h-10 text-white" />
-              </div>
+
               <h3 className="text-2xl font-bold mb-2 text-white">Fetch Repository</h3>
-              <p className="text-gray-400 text-sm mb-8 max-w-[250px]">Pull raw files from a public GitHub repository.</p>
-              <input 
-                type="text" 
-                placeholder="https://github.com/facebook/react" 
-                value={githubUrl}
-                onChange={e => setGithubUrl(e.target.value)}
-                className="w-full bg-black/40 border border-white/20 text-white placeholder-gray-500 px-5 py-4 rounded-xl mb-4 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all"
-              />
+              <p className="text-gray-400 text-sm mb-6 max-w-[250px]">Pull raw files from a GitHub repository.</p>
+              
+              <div className="w-full space-y-3 mb-4">
+                <input 
+                  type="text" 
+                  placeholder="https://github.com/facebook/react" 
+                  value={githubUrl}
+                  onChange={e => setGithubUrl(e.target.value)}
+                  className="w-full bg-black/40 border border-white/20 text-white placeholder-gray-500 px-5 py-3.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-sm"
+                />
+                
+                <input 
+                  type="password" 
+                  placeholder="Personal Access Token (PAT) - Required for Private Repos" 
+                  value={githubPat}
+                  onChange={e => {
+                    const val = e.target.value;
+                    setGithubPat(val);
+                    if (val.trim()) {
+                      localStorage.setItem('github_pat', val.trim());
+                    } else {
+                      localStorage.removeItem('github_pat');
+                    }
+                  }}
+                  className="w-full bg-black/40 border border-white/20 text-white placeholder-gray-500 px-5 py-3.5 rounded-xl focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all text-sm"
+                />
+              </div>
+              
               <Button onClick={handleGithubFetch} className="bg-white hover:bg-gray-200 text-black w-full rounded-xl py-6 text-lg font-semibold shadow-[0_0_20px_rgba(255,255,255,0.1)]">
                 Scan & Visualize
               </Button>
@@ -587,7 +461,7 @@ export default function LocalUploader({ onComplete }: { onComplete: (data: unkno
       )}
       
       {/* Decorative Blob */}
-      <div className="absolute -bottom-32 -right-32 w-80 h-80 bg-purple-600/15 blur-3xl rounded-full z-0 pointer-events-none"></div>
+      {!plain && <div className="absolute -bottom-32 -right-32 w-80 h-80 bg-purple-600/15 blur-3xl rounded-full z-0 pointer-events-none"></div>}
     </div>
   );
 }
