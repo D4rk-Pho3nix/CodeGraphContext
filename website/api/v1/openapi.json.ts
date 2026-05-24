@@ -19,7 +19,7 @@ export default async function handler(req: any, res: any) {
   const baseUrl = `${protocol}://${host}`;
 
   const spec = {
-    openapi: "3.0.0",
+    openapi: "3.1.0",
     info: {
       title: "CodeGraphContext Tunneling API",
       description: "Zero-server-compute API that tunnels semantic queries directly to Kuzu WASM running in the user's active browser tab. Queries classes, functions, calls, and file structural containment maps locally.",
