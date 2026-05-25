@@ -1,6 +1,50 @@
 // website/api/v1/query.ts
 import { createClient } from "@supabase/supabase-js";
 
+/**
+ * Builds a tool-specific graceful offline response (HTTP 200).
+ *
+ * CRITICAL: ChatGPT converts ANY non-2xx status into a ClientResponseError.
+ * We must ALWAYS return 200 — even when the browser tunnel is unreachable.
+ * The offline payload gives ChatGPT enough context to tell the user what to do.
+ */
+function offlineResponse(query_type: string, cleanRepo: string) {
+  const openUrl = cleanRepo
+    ? `https://cgc.codes/${cleanRepo}`
+    : "https://cgc.codes/explore";
+
+  const base = {
+    status: "offline",
+    message: `Browser tunnel is offline. Open ${openUrl} in a browser tab to activate the live code graph, then retry.`,
+  };
+
+  switch (query_type) {
+    case "list_indexed_repositories":
+      return { ...base, indexed_repositories: [] };
+    case "get_repository_stats":
+      return { ...base, repository: cleanRepo, total_nodes: 0, total_links: 0, files_count: 0, classes_count: 0, functions_count: 0 };
+    case "find_dead_code":
+      return { ...base, repository: cleanRepo, dead_symbols: [], total_dead_symbols: 0 };
+    case "calculate_cyclomatic_complexity":
+    case "find_most_complex_functions":
+      return { ...base, repository: cleanRepo, most_complex_functions: [] };
+    case "analyze_code_relationships":
+      return { ...base, repository: cleanRepo, relationships_count: 0, connected_nodes: [], connected_links: [] };
+    case "search_registry_bundles":
+      return { ...base, results: [] };
+    case "definitions":
+    case "callers":
+    case "callees":
+    case "file_structure":
+    case "search":
+      return { ...base, nodes: [], links: [] };
+    case "cypher":
+      return { ...base, nodes: [], links: [] };
+    default:
+      return { ...base, result: null };
+  }
+}
+
 export default async function handler(req: any, res: any) {
   // Enable CORS
   res.setHeader("Access-Control-Allow-Origin", "*");
@@ -16,8 +60,8 @@ export default async function handler(req: any, res: any) {
   const { repo, query_type, target, cypher_query } = params;
 
   if (!query_type || typeof query_type !== "string") {
-    return res.status(400).json({ 
-      error: "Missing required parameter 'query_type'. Expected: 'definitions', 'callers', 'callees', 'file_structure', or 'cypher'." 
+    return res.status(400).json({
+      error: "Missing required parameter 'query_type'. Expected: 'definitions', 'callers', 'callees', 'file_structure', or 'cypher'."
     });
   }
 
@@ -39,7 +83,7 @@ export default async function handler(req: any, res: any) {
   }
 
   const supabase = createClient(supabaseUrl, supabaseAnonKey);
-  
+
   const wasmQueries = ["definitions", "callers", "callees", "file_structure", "search", "cypher"];
   const isWasmQuery = wasmQueries.includes(query_type);
 
@@ -58,53 +102,41 @@ export default async function handler(req: any, res: any) {
   }
 
   const channel = supabase.channel(channelName);
-
   const requestId = Math.random().toString(36).substring(2, 15);
   let hasResponded = false;
 
   // Cleanup helper
   const cleanup = () => {
-    try {
-      supabase.removeChannel(channel);
-    } catch (err) {}
+    try { supabase.removeChannel(channel); } catch (err) {}
   };
 
   try {
     if (isWasmQuery) {
-      // 1. Standard Kuzu WASM Query Execution
+      // ── WASM Query Path (definitions, callers, callees, file_structure, search, cypher) ──
       let wasmResponse: any = null;
-      let resolveWaitPromise: (() => void) | null = null;
-      const waitPromise = new Promise<void>((resolve) => {
-        resolveWaitPromise = resolve;
-      });
+      let resolveWait: (() => void) | null = null;
+      const waitPromise = new Promise<void>((resolve) => { resolveWait = resolve; });
 
-      channel.on(
-        "broadcast",
-        { event: "query-response" },
-        ({ payload }: { payload: any }) => {
-          if (payload && payload.id === requestId) {
-            hasResponded = true;
-            wasmResponse = payload;
-            cleanup();
-            if (resolveWaitPromise) resolveWaitPromise();
-          }
+      channel.on("broadcast", { event: "query-response" }, ({ payload }: { payload: any }) => {
+        if (payload && payload.id === requestId) {
+          hasResponded = true;
+          wasmResponse = payload;
+          cleanup();
+          if (resolveWait) resolveWait();
         }
-      );
+      });
 
       await new Promise<void>((resolve, reject) => {
         channel.subscribe((status: string) => {
-          if (status === "SUBSCRIBED") {
-            resolve();
-          } else if (status === "CLOSED" || status === "TIMED_OUT") {
+          if (status === "SUBSCRIBED") resolve();
+          else if (status === "CLOSED" || status === "TIMED_OUT")
             reject(new Error(`Failed to subscribe to tunnel channel: ${status}`));
-          }
         });
       });
 
-      // Give Supabase's network routing table 250ms to fully propagate before broadcasting
-      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      // 500ms propagation buffer — critical after tab-sleep reconnects
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
 
-      // Dispatch query-request to the active browser tab
       const sendStatus = await channel.send({
         type: "broadcast",
         event: "query-request",
@@ -112,96 +144,71 @@ export default async function handler(req: any, res: any) {
           id: requestId,
           queryType: query_type,
           target: target || cypher_query || "",
-          params: {
-            cypher_query,
-            repo: cleanRepo
-          }
+          params: { cypher_query, repo: cleanRepo }
         }
       });
 
       if (sendStatus !== "ok") {
         cleanup();
+        // 502 is safe here — it's a network-level failure, not an offline browser
         return res.status(502).json({
           error: "Failed to broadcast query to the signaling tunnel.",
           details: sendStatus
         });
       }
 
-      // Wait up to 4.5 seconds, but resolve IMMEDIATELY as soon as the client responds!
-      const safetyTimeout = setTimeout(() => {
-        if (resolveWaitPromise) resolveWaitPromise();
-      }, 4500);
-
+      const safetyTimeout = setTimeout(() => { if (resolveWait) resolveWait(); }, 6000);
       await waitPromise;
       clearTimeout(safetyTimeout);
 
+      // NEVER return 4xx for offline — ChatGPT maps every non-2xx to ClientResponseError
       if (!hasResponded) {
-        return res.status(412).json({
-          status: "offline",
-          error: "Browser-as-a-Server dashboard is currently offline or closed.",
-          message: `To allow your AI assistant to query the graph of ${cleanRepo}, please keep https://cgc.codes/explore open in an active browser tab. Kuzu WASM will automatically boot locally and process your requests instantly.`
-        });
+        return res.status(200).json(offlineResponse(query_type, cleanRepo));
       }
 
       if (wasmResponse?.status === "success") {
-        return res.status(200).json(wasmResponse.result);
-      } else {
-        return res.status(500).json({
-          error: "Query execution failed inside client Kuzu WASM database.",
-          details: wasmResponse?.error
-        });
+        return res.status(200).json(wasmResponse.result ?? offlineResponse(query_type, cleanRepo));
       }
 
-    } else {
-      // 2. Dynamic Python MCP Tool execution (e.g. find_dead_code, calculate_cyclomatic_complexity, etc.)
-      let toolResponse: any = null;
-      let resolveWaitPromise: (() => void) | null = null;
-      const waitPromise = new Promise<void>((resolve) => {
-        resolveWaitPromise = resolve;
+      // WASM execution error in the browser — still 200 so ChatGPT reads the error text
+      return res.status(200).json({
+        status: "error",
+        error: "Query execution failed inside client Kuzu WASM database.",
+        details: wasmResponse?.error
       });
 
-      channel.on(
-        "broadcast",
-        { event: "tool-call-response" },
-        ({ payload }: { payload: any }) => {
-          if (payload && payload.id === requestId) {
-            hasResponded = true;
-            toolResponse = payload;
-            cleanup();
-            if (resolveWaitPromise) resolveWaitPromise();
-          }
+    } else {
+      // ── MCP Tool Path (get_repository_stats, find_dead_code, list_indexed_repositories, etc.) ──
+      let toolResponse: any = null;
+      let resolveWait: (() => void) | null = null;
+      const waitPromise = new Promise<void>((resolve) => { resolveWait = resolve; });
+
+      channel.on("broadcast", { event: "tool-call-response" }, ({ payload }: { payload: any }) => {
+        if (payload && payload.id === requestId) {
+          hasResponded = true;
+          toolResponse = payload;
+          cleanup();
+          if (resolveWait) resolveWait();
         }
-      );
+      });
 
       await new Promise<void>((resolve, reject) => {
         channel.subscribe((status: string) => {
-          if (status === "SUBSCRIBED") {
-            resolve();
-          } else if (status === "CLOSED" || status === "TIMED_OUT") {
+          if (status === "SUBSCRIBED") resolve();
+          else if (status === "CLOSED" || status === "TIMED_OUT")
             reject(new Error(`Failed to subscribe to tunnel channel: ${status}`));
-          }
         });
       });
 
-      // Give Supabase's network routing table extra time after tab-wake reconnects.
-      // Global tools (list_indexed_repositories, etc.) need more headroom than repo-scoped ones.
-      const propagationDelay = isGlobalTool ? 500 : 250;
-      await new Promise<void>((resolve) => setTimeout(resolve, propagationDelay));
+      // 500ms propagation buffer — critical after tab-sleep reconnects
+      await new Promise<void>((resolve) => setTimeout(resolve, 500));
 
-      // Prepare arguments (pass all params, ensuring repo is set)
-      const toolArgs = {
-        repo: cleanRepo,
-        ...params
-      };
+      const toolArgs = { repo: cleanRepo, ...params };
 
       const sendStatus = await channel.send({
         type: "broadcast",
         event: "tool-call-request",
-        payload: {
-          id: requestId,
-          toolName: query_type,
-          args: toolArgs
-        }
+        payload: { id: requestId, toolName: query_type, args: toolArgs }
       });
 
       if (sendStatus !== "ok") {
@@ -212,59 +219,42 @@ export default async function handler(req: any, res: any) {
         });
       }
 
-      // Wait up to 6 seconds (tab wake-up + Supabase propagation can take up to 5s).
-      // Resolve IMMEDIATELY as soon as the client responds!
-      const safetyTimeout = setTimeout(() => {
-        if (resolveWaitPromise) resolveWaitPromise();
-      }, 6000);
-
+      const safetyTimeout = setTimeout(() => { if (resolveWait) resolveWait(); }, 6000);
       await waitPromise;
       clearTimeout(safetyTimeout);
 
+      // NEVER return 4xx for offline — ChatGPT maps every non-2xx to ClientResponseError
       if (!hasResponded) {
-        // For list_indexed_repositories, return a graceful empty result instead of a hard 412.
-        // ChatGPT converts any non-2xx into a ClientResponseError, so we MUST stay 200.
-        if (query_type === "list_indexed_repositories") {
-          return res.status(200).json({
-            indexed_repositories: [],
-            status: "offline",
-            message: "Browser tunnel is offline. Open https://cgc.codes/explore to activate the live index."
-          });
-        }
-        return res.status(412).json({
-          status: "offline",
-          error: "Browser-as-a-Server dashboard is currently offline or closed.",
-          message: `To run Python tool '${query_type}', please open https://cgc.codes/explore in an active browser tab. Pyodide will automatically execute the analysis in the background.`
-        });
+        return res.status(200).json(offlineResponse(query_type, cleanRepo));
       }
 
       if (toolResponse?.status === "error") {
-        return res.status(500).json({
+        // Tool execution failed inside the browser — still 200 so ChatGPT reads the details
+        return res.status(200).json({
+          status: "error",
           error: `Python MCP execution failed for tool '${query_type}'.`,
           details: toolResponse.error
         });
       }
 
-      // Guard against undefined result (e.g. browser responded but result was missing).
-      // res.json(undefined) produces `{}` which ChatGPT flags as ClientResponseError.
+      // Guard: res.json(undefined) produces `{}` which ChatGPT misreads as ClientResponseError
       const toolResult = toolResponse?.result;
       if (toolResult === undefined || toolResult === null) {
-        if (query_type === "list_indexed_repositories") {
-          return res.status(200).json({ indexed_repositories: [] });
-        }
-        return res.status(200).json({ status: "success", result: null });
+        return res.status(200).json(offlineResponse(query_type, cleanRepo));
       }
 
-      // Return the exact result content payload from Python MCPServer
       return res.status(200).json(toolResult);
     }
 
   } catch (error: any) {
     cleanup();
     console.error("Signaling tunnel query error:", error);
-    return res.status(500).json({
+    // Return 200 even for unexpected errors — ChatGPT must be able to read the error text
+    return res.status(200).json({
+      status: "error",
       error: "Signaling gateway failed to execute tunnel query.",
-      details: error.message
+      details: error.message,
+      message: "Open https://cgc.codes/explore in a browser tab and retry."
     });
   }
 }
