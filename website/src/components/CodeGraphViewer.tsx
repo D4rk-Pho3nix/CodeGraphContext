@@ -1767,45 +1767,71 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
           />
         )}
 
-        {/* Legend Overlay */}
+        {/* Floating Controls Overlay (Bottom Right) */}
         {!showConfig && (
           <div
-            className={`absolute bottom-6 z-[60] backdrop-blur-3xl border rounded-2xl shadow-2xl pointer-events-auto ${isDark ? 'bg-black/50 border-white/10' : 'bg-white/80 border-black/10'}`}
+            className="absolute bottom-6 z-[60] flex flex-col gap-4 pointer-events-none items-end max-w-xs md:max-w-sm"
             style={{ right: (selectedFile && dimensions.width >= 768) ? codePanelWidth + 24 : 24 }}
           >
-            <div
-              className={`flex items-center justify-between px-5 pt-4 ${legendCollapsed ? 'pb-4' : 'pb-2'} cursor-pointer transition-colors rounded-t-2xl ${isDark ? 'hover:bg-white/5' : 'hover:bg-black/5'}`}
-              onClick={() => setLegendCollapsed(v => !v)}
-            >
-              <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 flex items-center gap-2">
-                <span>Graph Legend</span>
-              </p>
-              <div className="flex items-center gap-2">
-                <span
-                  className="text-blue-400/50 text-[10px] font-bold uppercase tracking-widest cursor-pointer"
-                  onClick={(e) => { e.stopPropagation(); setShowConfig(true); }}
+            {/* Elegant Floating Tunnel Online Glassmorphism Card */}
+            <div className="pointer-events-auto bg-black/75 border border-white/10 dark:border-white/20 rounded-2xl p-4 backdrop-blur-md shadow-2xl max-w-xs transition-all hover:border-purple-500/50">
+              <div className="flex flex-col gap-2.5">
+                <div className="flex items-center gap-2">
+                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_#10b981]" />
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400">Tunnel Online</span>
+                </div>
+                <p className="text-xs text-gray-300 leading-normal font-medium font-sans">
+                  Keep this tab open in the background so your LLM agents can query this workspace!
+                </p>
+                <a 
+                  href="https://chatgpt.com/g/g-6a1368599210819199a1c47d021020b6-codegraphcontext" 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center gap-1.5 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white font-semibold text-xs py-2 px-3 rounded-xl transition-all shadow-lg font-sans"
                 >
-                  Filters
-                </span>
-                <ChevronUp className={`w-3 h-3 text-gray-500 transition-transform ${legendCollapsed ? 'rotate-180' : ''}`} />
+                  🚀 Open CGC ChatGPT
+                </a>
               </div>
             </div>
-            {!legendCollapsed && (
-              <div className="flex flex-wrap gap-x-5 gap-y-3 justify-end px-5 pb-4 max-w-lg">
-                {Object.keys(DEFAULT_NODE_COLORS).map(type => (
-                  <div key={type} className="flex items-center gap-2">
-                    {graphMode === 'icon' ? (
-                      <span className="text-[12px]">{EMOJI_MAP[type] || '❓'}</span>
-                    ) : (
-                      <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: nodeColors[type], boxShadow: `0 0 8px ${nodeColors[type]}` }} />
-                    )}
-                    <span className={`text-[10px] font-bold uppercase tracking-widest ${visibleNodeTypes.has(type) ? (isDark ? 'text-gray-300' : 'text-gray-700') : 'text-gray-500 line-through'}`}>
-                      {type}
-                    </span>
-                  </div>
-                ))}
+
+            {/* Legend Overlay */}
+            <div
+              className={`pointer-events-auto backdrop-blur-3xl border rounded-2xl shadow-2xl ${isDark ? 'bg-black/50 border-white/10' : 'bg-white/80 border-black/10'}`}
+            >
+              <div
+                className={`flex items-center justify-between px-5 pt-4 ${legendCollapsed ? 'pb-4' : 'pb-2'} cursor-pointer transition-colors rounded-t-2xl ${isDark ? 'hover:bg-white/5' : 'hover:bg-black/5'}`}
+                onClick={() => setLegendCollapsed(v => !v)}
+              >
+                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-500 flex items-center gap-2">
+                  <span>Graph Legend</span>
+                </p>
+                <div className="flex items-center gap-2">
+                  <span
+                    className="text-blue-400/50 text-[10px] font-bold uppercase tracking-widest cursor-pointer"
+                    onClick={(e) => { e.stopPropagation(); setShowConfig(true); }}
+                  >
+                    Filters
+                  </span>
+                  <ChevronUp className={`w-3 h-3 text-gray-500 transition-transform ${legendCollapsed ? 'rotate-180' : ''}`} />
+                </div>
               </div>
-            )}
+              {!legendCollapsed && (
+                <div className="flex flex-wrap gap-x-5 gap-y-3 justify-end px-5 pb-4 max-w-lg">
+                  {Object.keys(DEFAULT_NODE_COLORS).map(type => (
+                    <div key={type} className="flex items-center gap-2">
+                      {graphMode === 'icon' ? (
+                        <span className="text-[12px]">{EMOJI_MAP[type] || '❓'}</span>
+                      ) : (
+                        <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: nodeColors[type], boxShadow: `0 0 8px ${nodeColors[type]}` }} />
+                      )}
+                      <span className={`text-[10px] font-bold uppercase tracking-widest ${visibleNodeTypes.has(type) ? (isDark ? 'text-gray-300' : 'text-gray-700') : 'text-gray-500 line-through'}`}>
+                        {type}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>

@@ -285,7 +285,7 @@ def context_default(
 # CREDENTIALS LOADING PRECEDENCE
 # ============================================================================
 
-def _load_credentials():
+def _load_credentials(cli_context_flag: Optional[str] = None):
     """
     Loads configuration and credentials from various sources into environment variables.
     Uses per-variable precedence - each variable is loaded from the highest priority source.
@@ -336,7 +336,7 @@ def _load_credentials():
     mcp_file_path = Path.cwd() / "mcp.json"
     if mcp_file_path.exists():
         try:
-            with open(mcp_file_path, "r") as f:
+            with open(mcp_file_path, "r", encoding="utf-8", errors="replace") as f:
                 mcp_config = json.load(f)
             server_env = mcp_config.get("mcpServers", {}).get("CodeGraphContext", {}).get("env", {})
             if isinstance(server_env, dict):
@@ -355,7 +355,8 @@ def _load_credentials():
     global_env_path = Path.home() / ".codegraphcontext" / ".env"
     if global_env_path.exists():
         try:
-            _append_source(str(global_env_path), dotenv_values(str(global_env_path)))
+            with open(global_env_path, "r", encoding="utf-8", errors="replace") as f:
+                _append_source(str(global_env_path), dotenv_values(stream=f))
         except Exception as e:
             console.print(f"[yellow]Warning: Could not load global .env: {e}[/yellow]")
     
@@ -363,7 +364,8 @@ def _load_credentials():
     try:
         dotenv_path = find_dotenv(usecwd=True, raise_error_if_not_found=False)
         if dotenv_path:
-            _append_source(str(dotenv_path), dotenv_values(dotenv_path))
+            with open(dotenv_path, "r", encoding="utf-8", errors="replace") as f:
+                _append_source(str(dotenv_path), dotenv_values(stream=f))
     except Exception as e:
         console.print(f"[yellow]Warning: Could not load .env from current directory: {e}[/yellow]")
 
@@ -371,8 +373,9 @@ def _load_credentials():
     try:
         local_cgc_env = codegraphcontext_dotenv_at_cwd(Path.cwd())
         if local_cgc_env and local_cgc_env.resolve() != global_env_path.resolve():
-            config_sources.append(dotenv_values(str(local_cgc_env)))
-            config_source_names.append(str(local_cgc_env))
+            with open(local_cgc_env, "r", encoding="utf-8", errors="replace") as f:
+                vals = dotenv_values(stream=f)
+                _append_source(str(local_cgc_env), vals)
     except Exception as e:
         console.print(
             f"[yellow]Warning: Could not load .codegraphcontext/.env at cwd: {e}[/yellow]"
@@ -418,31 +421,62 @@ def _load_credentials():
         )
     
     
-    # Show which database is actually being used.
-    # When CGC_RUNTIME_DB_TYPE or DEFAULT_DATABASE is set, trust it. Otherwise
-    # call get_database_manager() so the banner matches factory fallbacks.
+    # Detect the context to see if it specifies a custom database
+    if cli_context_flag is None:
+        import sys
+        for i, arg in enumerate(sys.argv):
+            if arg in ("--context", "-c"):
+                if i + 1 < len(sys.argv):
+                    cli_context_flag = sys.argv[i + 1]
+                    break
+            elif arg.startswith("--context="):
+                cli_context_flag = arg.split("=", 1)[1]
+                break
+
+    from codegraphcontext.cli.config_manager import resolve_context
+    ctx = None
+    try:
+        ctx = resolve_context(cli_context_flag)
+    except Exception:
+        pass
+
+    # Determine if there is a runtime database override.
     runtime_db = os.environ.get("CGC_RUNTIME_DB_TYPE")
-    database_type = os.environ.get("DATABASE_TYPE")
-    default_database = os.environ.get("DEFAULT_DATABASE")
+    has_runtime_override = (
+        runtime_db is not None
+        or "DATABASE_TYPE" in runtime_env
+        or "DEFAULT_DATABASE" in runtime_env
+    )
 
-    explicit_db = runtime_db or database_type or default_database
+    # If there is no runtime override, but the context defines a database,
+    # set DEFAULT_DATABASE to the context database to ensure that's what gets initialized.
+    if not has_runtime_override and ctx and ctx.mode != "global" and ctx.database:
+        os.environ["DEFAULT_DATABASE"] = ctx.database
 
+    # Now select the database based on precedence:
+    # 1. CGC_RUNTIME_DB_TYPE
+    # 2. DATABASE_TYPE or DEFAULT_DATABASE from runtime environment (shell variables)
+    # 3. Context database
+    # 4. DATABASE_TYPE or DEFAULT_DATABASE from merged config files (.env files)
+    # 5. Auto-detect fallback
     if runtime_db:
+        default_db = runtime_db.lower()
         db_source = "runtime-env (CGC_RUNTIME_DB_TYPE)"
     elif "DATABASE_TYPE" in runtime_env:
+        default_db = runtime_env["DATABASE_TYPE"].lower()
         db_source = "environment (DATABASE_TYPE)"
     elif "DEFAULT_DATABASE" in runtime_env:
+        default_db = runtime_env["DEFAULT_DATABASE"].lower()
         db_source = "environment (DEFAULT_DATABASE)"
-    elif database_type and "DATABASE_TYPE" in key_source_map:
+    elif not has_runtime_override and ctx and ctx.mode != "global" and ctx.database:
+        default_db = ctx.database.lower()
+        db_source = f"context ({ctx.context_name or 'resolved'})"
+    elif os.environ.get("DATABASE_TYPE") and "DATABASE_TYPE" in key_source_map:
+        default_db = os.environ["DATABASE_TYPE"].lower()
         db_source = key_source_map["DATABASE_TYPE"]
-    elif default_database and "DEFAULT_DATABASE" in key_source_map:
+    elif os.environ.get("DEFAULT_DATABASE") and "DEFAULT_DATABASE" in key_source_map:
+        default_db = os.environ["DEFAULT_DATABASE"].lower()
         db_source = key_source_map["DEFAULT_DATABASE"]
-    else:
-        db_source = "auto-detect"
-    explicit_db = runtime_db or os.environ.get("DEFAULT_DATABASE")
-
-    if explicit_db:
-        default_db = explicit_db.lower()
     else:
         # No explicit choice — ask the factory which backend it will use
         try:
@@ -455,6 +489,7 @@ def _load_credentials():
             default_db = "falkordb" if _is_falkordb_available() else "kuzudb"
         db_source = "auto-detect"
 
+    # Print selection banner
     if default_db == "neo4j":
         has_neo4j_creds = all([
             os.environ.get("NEO4J_URI"),
@@ -473,20 +508,14 @@ def _load_credentials():
         console.print(f"[cyan]Using database: falkordb (source: {db_source})[/cyan]")
     elif default_db == "kuzudb":
         console.print(f"[cyan]Using database: kuzudb (source: {db_source})[/cyan]")
+    elif default_db == "ladybugdb":
+        console.print(f"[cyan]Using database: ladybugdb (source: {db_source})[/cyan]")
     elif default_db == "falkordb-remote":
         host = os.environ.get("FALKORDB_HOST")
         if host:
             console.print(f"[cyan]Using database: falkordb-remote (source: {db_source}, host: {host})[/cyan]")
         else:
             console.print("[yellow]⚠ DATABASE_TYPE=falkordb-remote but FALKORDB_HOST not set.[/yellow]")
-    elif default_db == "falkordb":
-        if os.environ.get("FALKORDB_HOST"):
-            console.print(f"[cyan]Using database: falkordb-remote (source: {db_source}, host: {os.environ.get('FALKORDB_HOST')})[/cyan]")
-        else:
-            console.print(f"[cyan]Using database: falkordb (source: {db_source})[/cyan]")
-            console.print(
-                "[yellow]⚠ DEFAULT_DATABASE=falkordb-remote but FALKORDB_HOST not set.[/yellow]"
-            )
     else:
         console.print(f"[cyan]Using database: {default_db} (source: {db_source})[/cyan]")
 

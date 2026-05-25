@@ -1382,26 +1382,6 @@ const Explore = () => {
               data={graphData} 
               onClose={() => setGraphData(null)}
             />
-            {/* Elegant Floating Tunnel Online Glassmorphism Card */}
-            <div className="fixed bottom-6 right-6 z-50 bg-black/75 border border-white/10 dark:border-white/20 rounded-2xl p-4 backdrop-blur-md shadow-2xl max-w-xs transition-all hover:border-purple-500/50">
-              <div className="flex flex-col gap-2.5">
-                <div className="flex items-center gap-2">
-                  <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_#10b981]" />
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400">Tunnel Online</span>
-                </div>
-                <p className="text-xs text-gray-300 leading-normal font-medium">
-                  Keep this tab open in the background so your LLM agents can query this workspace!
-                </p>
-                <a 
-                  href="https://chatgpt.com/g/g-6a1368599210819199a1c47d021020b6-codegraphcontext" 
-                  target="_blank" 
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center justify-center gap-1.5 bg-gradient-to-r from-purple-500 to-indigo-600 hover:from-purple-600 hover:to-indigo-700 text-white font-semibold text-xs py-2 px-3 rounded-xl transition-all shadow-lg"
-                >
-                  🚀 Open CGC ChatGPT
-                </a>
-              </div>
-            </div>
           </div>
         )}
       </AnimatePresence>
