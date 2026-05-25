@@ -183,8 +183,10 @@ export default async function handler(req: any, res: any) {
         });
       });
 
-      // Give Supabase's network routing table 250ms to fully propagate before broadcasting
-      await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      // Give Supabase's network routing table extra time after tab-wake reconnects.
+      // Global tools (list_indexed_repositories, etc.) need more headroom than repo-scoped ones.
+      const propagationDelay = isGlobalTool ? 500 : 250;
+      await new Promise<void>((resolve) => setTimeout(resolve, propagationDelay));
 
       // Prepare arguments (pass all params, ensuring repo is set)
       const toolArgs = {
@@ -210,15 +212,25 @@ export default async function handler(req: any, res: any) {
         });
       }
 
-      // Wait up to 4.5 seconds, but resolve IMMEDIATELY as soon as the client responds!
+      // Wait up to 6 seconds (tab wake-up + Supabase propagation can take up to 5s).
+      // Resolve IMMEDIATELY as soon as the client responds!
       const safetyTimeout = setTimeout(() => {
         if (resolveWaitPromise) resolveWaitPromise();
-      }, 4500);
+      }, 6000);
 
       await waitPromise;
       clearTimeout(safetyTimeout);
 
       if (!hasResponded) {
+        // For list_indexed_repositories, return a graceful empty result instead of a hard 412.
+        // ChatGPT converts any non-2xx into a ClientResponseError, so we MUST stay 200.
+        if (query_type === "list_indexed_repositories") {
+          return res.status(200).json({
+            indexed_repositories: [],
+            status: "offline",
+            message: "Browser tunnel is offline. Open https://cgc.codes/explore to activate the live index."
+          });
+        }
         return res.status(412).json({
           status: "offline",
           error: "Browser-as-a-Server dashboard is currently offline or closed.",
@@ -233,8 +245,18 @@ export default async function handler(req: any, res: any) {
         });
       }
 
+      // Guard against undefined result (e.g. browser responded but result was missing).
+      // res.json(undefined) produces `{}` which ChatGPT flags as ClientResponseError.
+      const toolResult = toolResponse?.result;
+      if (toolResult === undefined || toolResult === null) {
+        if (query_type === "list_indexed_repositories") {
+          return res.status(200).json({ indexed_repositories: [] });
+        }
+        return res.status(200).json({ status: "success", result: null });
+      }
+
       // Return the exact result content payload from Python MCPServer
-      return res.status(200).json(toolResponse?.result);
+      return res.status(200).json(toolResult);
     }
 
   } catch (error: any) {
