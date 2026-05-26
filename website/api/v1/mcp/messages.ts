@@ -235,7 +235,9 @@ export default async function handler(req: any, res: any) {
         const branch = toolArgs?.branch || "";
         const commit = toolArgs?.commit || "";
 
-        if (!repo || typeof repo !== "string") {
+        const isGlobalTool = toolName === "list_indexed_repositories" || toolName === "search_registry_bundles";
+
+        if (!isGlobalTool && (!repo || typeof repo !== "string")) {
           return res.status(200).json({
             jsonrpc: "2.0",
             id,
@@ -249,13 +251,15 @@ export default async function handler(req: any, res: any) {
           });
         }
 
-        const cleanRepo = repo.trim().replace(/^(https?:\/\/)?(www\.)?github\.com\//, "").replace(/\/$/, "");
-        const cleanRepoName = cleanRepo.replace(/\//g, "_").toLowerCase();
+        const cleanRepo = repo ? repo.trim().replace(/^(https?:\/\/)?(www\.)?github\.com\//, "").replace(/\/$/, "") : "";
+        const cleanRepoName = cleanRepo ? cleanRepo.replace(/\//g, "_").toLowerCase() : "";
         const cleanBranch = branch ? String(branch).replace(/\//g, "_").toLowerCase() : "main";
         const commitStr = commit ? String(commit) : "latest";
         const cleanCommit = commitStr.length === 40 && /^[0-9a-fA-F]+$/.test(commitStr) ? commitStr.substring(0, 7).toLowerCase() : commitStr.toLowerCase();
         
-        const channelName = `cgc-tunnel-${cleanRepoName}-${cleanBranch}-${cleanCommit}`;
+        const channelName = isGlobalTool 
+          ? "cgc-tunnel-global-mcp" 
+          : `cgc-tunnel-${cleanRepoName}-${cleanBranch}-${cleanCommit}`;
         const channel = supabase.channel(channelName);
         const requestId = Math.random().toString(36).substring(2, 15);
         let hasResponded = false;

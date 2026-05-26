@@ -99,79 +99,27 @@ export class KuzuCoordinator {
     if (!this.channel) {
       console.log(`[KuzuCoordinator] Subscribing to query channel: ${this.channelName}`);
       this.channel = supabase.channel(this.channelName);
-
-      this.channel
-        .on(
-          "broadcast",
-          { event: "query-request" },
-          async ({ payload }: { payload: any }) => {
-            const { id, queryType, target, params } = payload || {};
-            if (!id || !this.channel) return;
-            console.log(
-              `[KuzuCoordinator] 📥 Query request received: id=${id}, type=${queryType}`
-            );
-            try {
-              const result = await this.executeQueryCallback(queryType, target, params);
-              await this.channel.send({
-                type: "broadcast",
-                event: "query-response",
-                payload: { id, status: "success", result },
-              });
-            } catch (err: any) {
-              await this.channel.send({
-                type: "broadcast",
-                event: "query-response",
-                payload: { id, status: "error", error: err.message },
-              });
-            }
-          }
-        )
-        .on(
-          "broadcast",
-          { event: "tool-call-request" },
-          async ({ payload }: { payload: any }) => {
-            const { id, toolName, args } = payload || {};
-            if (!id || !toolName || !this.channel) return;
-            console.log(
-              `[KuzuCoordinator] 📥 MCP Tool Call request received: id=${id}, name=${toolName}`
-            );
-            try {
-              const result = await this.executeToolCallback(toolName, args);
-              await this.channel.send({
-                type: "broadcast",
-                event: "tool-call-response",
-                payload: { id, status: "success", result },
-              });
-            } catch (err: any) {
-              await this.channel.send({
-                type: "broadcast",
-                event: "tool-call-response",
-                payload: { id, status: "error", error: err.message },
-              });
-            }
-          }
-        )
-        .subscribe((status: string) => {
-          if (status === "SUBSCRIBED") {
-            console.log(
-              `[KuzuCoordinator] ✅ Subscribed to query channel: ${this.channelName}`
-            );
-          }
-        });
+      this.setupChannelListeners(this.channel, this.channelName);
+      this.channel.subscribe((status: string) => {
+        if (status === "SUBSCRIBED") {
+          console.log(
+            `[KuzuCoordinator] ✅ Subscribed to query channel: ${this.channelName}`
+          );
+        }
+      });
     }
 
     if (!this.globalChannel) {
       console.log(`[KuzuCoordinator] Subscribing to global channel: ${GLOBAL_CHANNEL_NAME}`);
       this.globalChannel = supabase.channel(GLOBAL_CHANNEL_NAME);
-
-      this.globalChannel
-        .subscribe((status: string) => {
-          if (status === "SUBSCRIBED") {
-            console.log(
-              `[KuzuCoordinator] ✅ Subscribed to global channel: ${GLOBAL_CHANNEL_NAME}`
-            );
-          }
-        });
+      this.setupChannelListeners(this.globalChannel, GLOBAL_CHANNEL_NAME);
+      this.globalChannel.subscribe((status: string) => {
+        if (status === "SUBSCRIBED") {
+          console.log(
+            `[KuzuCoordinator] ✅ Subscribed to global channel: ${GLOBAL_CHANNEL_NAME}`
+          );
+        }
+      });
     }
 
     // Keep WebSocket warm when ChatGPT tab steals focus (Firefox/Chrome throttle background tabs)
@@ -188,6 +136,60 @@ export class KuzuCoordinator {
         /* ignore */
       }
     }, 15000);
+  }
+
+  private setupChannelListeners(channel: RealtimeChannel, name: string) {
+    channel
+      .on(
+        "broadcast",
+        { event: "query-request" },
+        async ({ payload }: { payload: any }) => {
+          const { id, queryType, target, params } = payload || {};
+          if (!id) return;
+          console.log(
+            `[KuzuCoordinator] 📥 Query request received on [${name}]: id=${id}, type=${queryType}`
+          );
+          try {
+            const result = await this.executeQueryCallback(queryType, target, params);
+            await channel.send({
+              type: "broadcast",
+              event: "query-response",
+              payload: { id, status: "success", result },
+            });
+          } catch (err: any) {
+            await channel.send({
+              type: "broadcast",
+              event: "query-response",
+              payload: { id, status: "error", error: err.message },
+            });
+          }
+        }
+      )
+      .on(
+        "broadcast",
+        { event: "tool-call-request" },
+        async ({ payload }: { payload: any }) => {
+          const { id, toolName, args } = payload || {};
+          if (!id || !toolName) return;
+          console.log(
+            `[KuzuCoordinator] 📥 MCP Tool Call request received on [${name}]: id=${id}, name=${toolName}`
+          );
+          try {
+            const result = await this.executeToolCallback(toolName, args);
+            await channel.send({
+              type: "broadcast",
+              event: "tool-call-response",
+              payload: { id, status: "success", result },
+            });
+          } catch (err: any) {
+            await channel.send({
+              type: "broadcast",
+              event: "tool-call-response",
+              payload: { id, status: "error", error: err.message },
+            });
+          }
+        }
+      );
   }
 
   public async stop(keepStarted = false) {

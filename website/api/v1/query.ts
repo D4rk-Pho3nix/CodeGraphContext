@@ -94,9 +94,10 @@ export default async function handler(req: any, res: any) {
     cleanRepo = repo.trim().replace(/^(https?:\/\/)?(www\.)?github\.com\//, "").replace(/\/$/, "");
   }
 
-  // Route ALL queries to their specific repository channel if a repository is specified.
+  // Route queries to their specific repository channel if a repository is specified.
   // We scope it by branch and commit for 100% concurrency isolation.
-  if (cleanRepo) {
+  // CRITICAL: Global tools MUST always route to the global channel to ensure backward compatibility and zero-setup capability!
+  if (cleanRepo && !isGlobalTool) {
     const cleanRepoName = cleanRepo.replace(/\//g, "_").toLowerCase();
     const cleanBranch = branch ? String(branch).replace(/\//g, "_").toLowerCase() : "main";
     const commitStr = commit ? String(commit) : "latest";
