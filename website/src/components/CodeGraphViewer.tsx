@@ -10,7 +10,7 @@ import {
   ChevronRight, ChevronDown, Folder, FolderOpen,
   PanelLeftClose, PanelLeftOpen,
   Layers, Check, X, Code2, Sun, Moon, ChevronUp, Route,
-  Download, UploadCloud, Menu, MessageSquare, Copy
+  Download, UploadCloud, Menu, MessageSquare, Copy, HelpCircle
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useTheme } from "next-themes";
@@ -18,6 +18,7 @@ import FlowchartSVG from "./FlowchartSVG";
 import { packageCgcBundle, downloadBlob, publishCgcBundle } from "../lib/cgc-exporter";
 import { toast } from "sonner";
 import { getOrCreateSessionId } from "../lib/utils";
+import { OnboardingTour, TourStep, hasSeenWalkthrough, setSeenWalkthrough } from "./OnboardingTour";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -379,6 +380,86 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
   const [showWarningAlert, setShowWarningAlert] = useState(false);
   const [duplicateBundle, setDuplicateBundle] = useState<any | null>(null);
   const [showMobileMenu, setShowMobileMenu] = useState(false);
+  const [showTour, setShowTour] = useState(false);
+
+  // Trigger tour automatically on first visit after a slight delay for the graph to stabilize
+  useEffect(() => {
+    if (!hasSeenWalkthrough()) {
+      const timer = setTimeout(() => {
+        setShowTour(true);
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
+  const tourSteps: TourStep[] = useMemo(() => [
+    {
+      targetId: "viewport-canvas",
+      title: "Welcome to CodeGraphContext! 🌐",
+      description: "Let's take a quick 1-minute guided tour of your interactive code graph.",
+      position: "center"
+    },
+    {
+      targetId: "cgc-project-tree",
+      title: "Interactive Project Tree 📁",
+      description: "Explore your codebase directory structure here. You can browse, search, and click files to filter the semantic graph.",
+      position: "right",
+      beforeAction: () => {
+        setCollapsed(false);
+        setShowConfig(false);
+        setIsPathMode(false);
+      }
+    },
+    {
+      targetId: "cgc-settings-btn",
+      title: "Fine-tune Graph Settings ⚙️",
+      description: "Fine-tune graph settings. Adjust edge thickness, node sizes, toggle node visibility, and so on.",
+      position: "bottom",
+      beforeAction: () => {
+        setCollapsed(false);
+        setShowConfig(true);
+        setIsPathMode(false);
+      }
+    },
+    {
+      targetId: "cgc-pathfinder-btn",
+      title: "Dependency Path Finder 🗺️",
+      description: "Toggles the call path analysis mode. Select any two nodes in the graph to automatically trace the pathway.",
+      position: "bottom",
+      beforeAction: () => {
+        setCollapsed(false);
+        setShowConfig(false);
+        setIsPathMode(true);
+      }
+    },
+    {
+      targetId: "cgc-viewmode-dropdown",
+      title: "Stunning 2D & 3D Layouts 🎨",
+      description: "Switch between unique visual aesthetic modes: Classic, Curvy, SVG Flowcharts, Neon Glow, orbital Galaxies, or a highly immersive 3D Cityscape island layout!",
+      position: "bottom"
+    },
+    {
+      targetId: "cgc-export-publish",
+      title: "Export & Share Indexes 💾",
+      description: "Export this codebase's AST dependency index as a lightweight, standardized .cgc binary bundle file for offline use, or publish it to the registry.",
+      position: "bottom"
+    },
+    {
+      targetId: "cgc-chatgpt-tunnel",
+      title: "Real-Time AI Companion 🤖",
+      description: "Bridges this active browser tab directly to our custom GPT via a secure signaling tunnel. Ask ChatGPT structural questions about your codebase in real-time!",
+      position: "bottom"
+    },
+    {
+      targetId: "cgc-legend-panel",
+      title: "Symbol Filters 🏷️",
+      description: "Hover or toggle node layers in the legend to reduce visual clutter on large graphs.",
+      position: "top",
+      beforeAction: () => {
+        setLegendCollapsed(false);
+      }
+    }
+  ], []);
 
   // Dynamic ChatGPT Connection URL with pre-filled version-scoped query
   const metadata = data.metadata || {};
@@ -1306,6 +1387,7 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
           {!collapsed && (
             <motion.div
               key="sidebar"
+              id="cgc-project-tree"
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
@@ -1331,6 +1413,7 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
                   </h2>
                   <div className="flex items-center gap-1">
                     <button
+                      id="cgc-pathfinder-btn"
                       onClick={() => {
                         setIsPathMode(!isPathMode);
                         setShowConfig(false);
@@ -1341,6 +1424,7 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
                       <Route className="w-4 h-4" />
                     </button>
                     <button
+                      id="cgc-settings-btn"
                       onClick={() => {
                         setShowConfig(!showConfig);
                         setIsPathMode(false);
@@ -1492,6 +1576,23 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
                         ))}
                       </div>
                     </div>
+
+                    <div>
+                      <Button
+                        variant="outline"
+                        className="w-full text-xs border-blue-500/30 hover:border-blue-500/60 bg-blue-500/10 hover:bg-blue-500/20 text-blue-300 rounded-xl font-bold flex items-center justify-center gap-1.5 py-1.5 cursor-pointer mt-6"
+                        onClick={() => {
+                          setSeenWalkthrough(false);
+                          setShowTour(true);
+                          setCollapsed(false);
+                          setShowConfig(false);
+                          setIsPathMode(false);
+                        }}
+                      >
+                        <HelpCircle className="w-3.5 h-3.5" />
+                        Restart Guided Tour
+                      </Button>
+                    </div>
                   </motion.div>
                 ) : (
                   <div className="py-1">
@@ -1557,32 +1658,36 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
 
           {/* Desktop Top Right Badges */}
           <div className="hidden md:flex items-center gap-3">
-            {/* Export Button */}
-            <button
-              onClick={handleExport}
-              className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full transition-all backdrop-blur-md shadow-2xl cursor-pointer ${isDark ? 'bg-black/40 hover:bg-white/10 text-white border-white/10' : 'bg-white/80 hover:bg-white text-gray-800 border-black/10'}`}
-              title="Download code graph as a .cgc file"
-            >
-              <Download className="w-3.5 h-3.5 text-blue-400" />
-              Export
-            </button>
+            {/* Export & Publish Group */}
+            <div id="cgc-export-publish" className="flex items-center gap-3">
+              {/* Export Button */}
+              <button
+                onClick={handleExport}
+                className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full transition-all backdrop-blur-md shadow-2xl cursor-pointer ${isDark ? 'bg-black/40 hover:bg-white/10 text-white border-white/10' : 'bg-white/80 hover:bg-white text-gray-800 border-black/10'}`}
+                title="Download code graph as a .cgc file"
+              >
+                <Download className="w-3.5 h-3.5 text-blue-400" />
+                Export
+              </button>
 
-            {/* Publish Button */}
-            <button
-              onClick={() => {
-                setPublishRepo(defaultRepoName);
-                setPublishVersion(data.metadata?.version || "1.0.0");
-                setShowPublishModal(true);
-              }}
-              className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full transition-all backdrop-blur-md shadow-2xl cursor-pointer ${isDark ? 'bg-black/40 hover:bg-white/10 text-white border-white/10' : 'bg-white/80 hover:bg-white text-gray-800 border-black/10'}`}
-              title="Publish this graph to the public registry"
-            >
-              <UploadCloud className="w-3.5 h-3.5 text-green-400" />
-              Publish
-            </button>
+              {/* Publish Button */}
+              <button
+                onClick={() => {
+                  setPublishRepo(defaultRepoName);
+                  setPublishVersion(data.metadata?.version || "1.0.0");
+                  setShowPublishModal(true);
+                }}
+                className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full transition-all backdrop-blur-md shadow-2xl cursor-pointer ${isDark ? 'bg-black/40 hover:bg-white/10 text-white border-white/10' : 'bg-white/80 hover:bg-white text-gray-800 border-black/10'}`}
+                title="Publish this graph to the public registry"
+              >
+                <UploadCloud className="w-3.5 h-3.5 text-green-400" />
+                Publish
+              </button>
+            </div>
 
             {/* ChatGPT Tunnel Button */}
             <button
+              id="cgc-chatgpt-tunnel"
               onClick={handleConnectChatGPT}
               className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full transition-all backdrop-blur-md shadow-2xl cursor-pointer ${isDark ? 'bg-black/40 hover:bg-white/10 text-white border-white/10' : 'bg-white/80 hover:bg-white text-gray-800 border-black/10'}`}
               title="Open the CGC ChatGPT GPT. Keep this cgc.codes tab focused (not behind ChatGPT) so the signaling tunnel stays online."
@@ -1593,7 +1698,7 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
             </button>
 
             {/* Mode Selector Dropdown */}
-            <div ref={modeMenuRef} className="relative">
+            <div id="cgc-viewmode-dropdown" ref={modeMenuRef} className="relative">
               <button
                 onClick={() => setShowModeMenu(v => !v)}
                 className={`flex items-center gap-2 text-[11px] uppercase tracking-widest font-bold px-4 py-2 border rounded-full transition-all backdrop-blur-md shadow-2xl cursor-pointer ${isDark ? 'bg-black/40 hover:bg-white/10 text-white border-white/10' : 'bg-white/80 hover:bg-white text-gray-800 border-black/10'}`}
@@ -1902,6 +2007,7 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
           >
             {/* Legend Overlay */}
             <div
+              id="cgc-legend-panel"
               className={`pointer-events-auto backdrop-blur-3xl border rounded-2xl shadow-2xl ${isDark ? 'bg-black/50 border-white/10' : 'bg-white/80 border-black/10'}`}
             >
               <div
@@ -2344,6 +2450,19 @@ export default function CodeGraphViewer({ data, onClose }: { data: any, onClose:
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {showTour && (
+        <OnboardingTour
+          steps={tourSteps}
+          onComplete={() => {
+            setShowTour(false);
+            setSeenWalkthrough(true);
+            toast.success("Walkthrough completed! You're ready to explore.", {
+              icon: "🚀"
+            });
+          }}
+        />
+      )}
     </motion.div>
   );
 }
