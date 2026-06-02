@@ -68,6 +68,7 @@ EXTENSION_TO_SCIP: Dict[str, Tuple[str, str, str, str]] = {
     ".dart":  ("dart",       "scip_dart",       "dart pub global activate scip_dart", "dart:stable"),
     ".cpp":   ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
     ".hpp":   ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
+    ".hh":    ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
     ".c":     ("c",          "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
     ".h":     ("cpp",        "scip-clang",      "brew install llvm", "sourcegraph/scip-clang:sha-1704d3d"),
     ".cs":    ("csharp",     "scip-dotnet",     "dotnet tool install -g Microsoft.CodeAnalysis.ScipDotnet", "sourcegraph/scip-dotnet"),
