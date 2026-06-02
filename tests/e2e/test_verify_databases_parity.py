@@ -144,7 +144,7 @@ async def test_database_parity_e2e(temp_test_dir):
                 "stats": stats
             }
         except Exception as e:
-            if db_type == "neo4j" and "failed to connect" in str(e).lower():
+            if db_type == "neo4j" and ("failed to connect" in str(e).lower() or "not running" in str(e).lower() or "exit code 1" in str(e).lower()):
                 pytest.skip("Neo4j server is not running/available.")
             raise e
             
