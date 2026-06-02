@@ -92,8 +92,8 @@ def _generate_mcp_json(creds):
                     "disabledTools": [],
                     "disabled": False
                 },
-                "disabled": False,
-                "alwaysAllow": []
+                "disabled": False 
+        
             }
         }
     }

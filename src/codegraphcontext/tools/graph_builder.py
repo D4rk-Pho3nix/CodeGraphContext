@@ -68,6 +68,7 @@ class GraphBuilder:
             ".lua": "lua",
             ".ex": "elixir",
             ".exs": "elixir",
+            ".el": "elisp",
             ".html": "html",
             ".css": "css",
         }
@@ -222,6 +223,9 @@ class GraphBuilder:
         if '.exs' in files_by_lang:
             from .languages import elixir as elixir_lang_module
             imports_map.update(elixir_lang_module.pre_scan_elixir(files_by_lang['.exs'], self.get_parser('.exs')))
+        if '.el' in files_by_lang:
+            from .languages import elisp as elisp_lang_module
+            imports_map.update(elisp_lang_module.pre_scan_elisp(files_by_lang['.el'], self.get_parser('.el')))
 
         return imports_map
 
