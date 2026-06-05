@@ -1315,11 +1315,17 @@ class GraphWriter:
         repo_path_str = repo_path.replace("\\", "/")
         path_prefix = repo_path_str + "/"
         with self.driver.session() as session:
+            # Try both normalized and original path to handle cross-platform mismatches
             result = session.run(
                 "MATCH (r:Repository {path: $path}) RETURN count(r) as cnt", path=repo_path_str
             ).single()
             if not result or result["cnt"] == 0:
-                warning_logger(f"Attempted to delete non-existent repository: {repo_path_str}")
+                # Fallback: try original path (Windows backslash)
+                result = session.run(
+                    "MATCH (r:Repository {path: $path}) RETURN count(r) as cnt", path=repo_path
+                ).single()
+            if not result or result["cnt"] == 0:
+                warning_logger(f"Attempted to delete non-existent repository: {repo_path}")
                 return False
 
         for rel_type in ("CALLS", "INHERITS", "IMPORTS"):
