@@ -70,7 +70,7 @@ A powerful **MCP server** and **CLI toolkit** that indexes local code into a gra
 ---
 
 ## 📍 Quick Navigation
-* [🚀 Quick Start](#quick-start) 
+* [🚀 Quick Start](#-installation--quick-start) 
 * [🌐 Supported Programming Languages](#supported-programming-languages) 
 * [🛠️ CLI Toolkit](#for-cli-toolkit-mode) 
 * [🤖 MCP Server](#-for-mcp-server-mode) 
