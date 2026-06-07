@@ -371,10 +371,10 @@ class CGCBundle:
             # Get node labels (backend-aware)
             backend = getattr(self.db_manager, "get_backend_type", lambda: "neo4j")()
             try:
-                if backend == "kuzudb":
-                    # KuzuDB Python bindings ≤ 0.11 don't support SHOW TABLES
+                if backend in ("kuzudb", "ladybugdb"):
+                    # KuzuDB/LadybugDB: SHOW TABLES not available in ≤ 0.11
                     result = session.run("MATCH (n) RETURN DISTINCT label(n) AS lbl")
-                    labels = sorted({record[0] for record in result if record[0]})
+                    labels = sorted({record[0] for record in result if record[0] is not None})
                 else:
                     result = session.run("CALL db.labels()")
                     labels = []

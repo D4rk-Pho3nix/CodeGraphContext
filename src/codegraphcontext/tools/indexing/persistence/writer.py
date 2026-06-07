@@ -11,6 +11,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from ....utils.debug_log import info_logger, warning_logger
 from ....utils.git_utils import get_repo_commit_hash
 from ..sanitize import sanitize_props
+from ..schema_contract import NODE_LABELS
 
 
 def _is_binder_exception(e: Exception) -> bool:
@@ -25,14 +26,21 @@ class GraphWriter:
     def __init__(self, driver: Any, db_manager: Any = None):
         self.driver = driver
         self._db_manager = db_manager
+        if db_manager is None:
+            warning_logger(
+                "[GraphWriter] db_manager not provided; "
+                "backend detection will default to 'neo4j'"
+            )
 
     def _get_all_node_labels(self) -> list[str]:
         """Discover all node labels in the database, backend-aware.
 
-        Neo4j uses ``CALL db.labels()``, KuzuDB uses
-        ``MATCH (n) RETURN DISTINCT label(n)`` (since ``SHOW TABLES``
-        is not supported in KuzuDB Python bindings ≤ 0.11),
-        and other backends fall back to a comprehensive static list.
+        Neo4j / Nornic use ``CALL db.labels()``.
+        KuzuDB / LadybugDB use ``MATCH (n) RETURN DISTINCT label(n)``
+        (``SHOW TABLES`` is not supported in KuzuDB Python bindings ≤ 0.11).
+        FalkorDB uses ``CALL db.labels()`` without YIELD.
+        All backends fall back to :data:`schema_contract.NODE_LABELS`
+        plus supplementary labels on failure.
         """
         # Prefer db_manager.get_backend_type(); fall back to driver, then neo4j
         backend = (
@@ -41,23 +49,37 @@ class GraphWriter:
             or (lambda: "neo4j")
         )()
 
-        if backend == "kuzudb":
+        if backend in ("kuzudb", "ladybugdb"):
+            # NOTE: Full node scan required because SHOW TABLES is unavailable
+            # in KuzuDB ≤ 0.11. Acceptable for delete_repository (low-frequency).
             try:
                 with self.driver.session() as session:
-                    result = session.run("MATCH (n) RETURN DISTINCT label(n) AS lbl")
-                    labels = sorted({record[0] for record in result if record[0]})
+                    result = session.run(
+                        "MATCH (n) RETURN DISTINCT label(n) AS lbl"
+                    )
+                    labels = sorted(
+                        {record[0] for record in result if record[0] is not None}
+                    )
                     if labels:
                         return labels
             except Exception as e:
-                info_logger(f"[DELETE] label discovery failed for KuzuDB ({e}), using fallback list")
+                info_logger(
+                    f"[DELETE] label discovery failed for {backend} "
+                    f"({e}), using fallback list"
+                )
 
-        elif backend in ("neo4j", "nornicdb"):
+        elif backend in ("neo4j", "nornic"):
             try:
                 with self.driver.session() as session:
-                    label_records = session.run("CALL db.labels() YIELD label RETURN label")
+                    label_records = session.run(
+                        "CALL db.labels() YIELD label RETURN label"
+                    )
                     return sorted({record["label"] for record in label_records})
             except Exception as e:
-                info_logger(f"[DELETE] CALL db.labels() failed ({e}), using fallback list")
+                info_logger(
+                    f"[DELETE] CALL db.labels() failed for {backend} "
+                    f"({e}), using fallback list"
+                )
 
         elif backend in ("falkordb", "falkordb-remote"):
             try:
@@ -65,17 +87,18 @@ class GraphWriter:
                     label_records = session.run("CALL db.labels()")
                     return sorted({record["label"] for record in label_records})
             except Exception as e:
-                info_logger(f"[DELETE] CALL db.labels() failed for FalkorDB ({e}), using fallback list")
+                info_logger(
+                    f"[DELETE] CALL db.labels() failed for {backend} "
+                    f"({e}), using fallback list"
+                )
 
-        # Fallback: comprehensive list of all known CGC node labels
-        return sorted({
-            "Repository", "Directory", "File", "Function", "Class",
-            "Variable", "Parameter", "Module", "Interface", "Trait",
-            "Struct", "Enum", "EnumValue", "Namespace", "TypeAlias",
-            "Decorator", "Property", "Method", "DbTable", "DbColumn",
-            "RedisKeyPattern", "ExternalClass", "ExternalFunction",
-            "MavenModule", "GradleModule", "Endpoint", "OrmMapping",
-            "Query", "SpringDataRepository",
+        # Fallback: canonical NODE_LABELS from schema_contract + supplementary
+        # labels that may exist in the graph from dynamic indexing paths.
+        return sorted(NODE_LABELS | {
+            "ExternalClass", "ExternalFunction",
+            "EnumValue", "Namespace", "TypeAlias", "Decorator",
+            "Method", "Endpoint", "OrmMapping", "Query",
+            "SpringDataRepository", "Mixin", "Extension", "Object",
         })
 
     def add_repository_to_graph(self, repo_path: Path, is_dependency: bool = False) -> None:

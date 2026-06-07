@@ -2849,7 +2849,7 @@ def _write_datasource_graph(ingested: dict) -> None:
         raise typer.Exit(1)
 
     from codegraphcontext.tools.indexing.persistence.writer import GraphWriter
-    GraphWriter(driver).write_datasource_graph(ingested)
+    GraphWriter(driver, db_manager=dm).write_datasource_graph(ingested)
 
 
 if __name__ == "__main__":
