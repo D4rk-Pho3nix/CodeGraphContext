@@ -174,6 +174,27 @@ def _make_writer() -> tuple[GraphWriter, MagicMock]:
     return writer, mock_session
 
 
+def _make_writer_with_delete_mocks() -> tuple[GraphWriter, MagicMock, MagicMock]:
+    """
+    Return a GraphWriter with a mocked driver that returns proper values
+    for delete_repository_from_graph:
+      - 1st call (existence check) -> {"cnt": 1}
+      - subsequent calls (DELETE queries) -> {"deleted": 0}
+    """
+    writer, session = _make_writer()
+    call_counter = iter([{"cnt": 1}])
+
+    def _side_effect(*_a, **_kw):
+        try:
+            r = next(call_counter)
+        except StopIteration:
+            r = {"deleted": 0}
+        return MagicMock(single=MagicMock(return_value=r))
+
+    session.run.side_effect = _side_effect
+    return writer, session
+
+
 class TestAddRepositoryToGraph:
     def test_stored_path_uses_forward_slashes(self, tmp_path):
         writer, session = _make_writer()
@@ -206,10 +227,8 @@ class TestAddRepositoryToGraph:
 class TestDeleteRepositoryFromGraph:
     def test_normalized_path_used_for_lookup(self, tmp_path):
         """delete_repository_from_graph normalizes before querying."""
-        writer, session = _make_writer()
+        writer, session, *_ = _make_writer_with_delete_mocks()
 
-        # Simulate repo found
-        session.run.return_value.single.return_value = {"cnt": 1}
         # Make label discovery return empty to short-circuit node deletion loop
         writer._get_all_node_labels = MagicMock(return_value=[])
 
@@ -225,8 +244,7 @@ class TestDeleteRepositoryFromGraph:
 
     def test_prefix_uses_forward_slash(self, tmp_path):
         """The STARTS WITH prefix must end with '/' not '\\'."""
-        writer, session = _make_writer()
-        session.run.return_value.single.return_value = {"cnt": 1}
+        writer, session, *_ = _make_writer_with_delete_mocks()
         writer._get_all_node_labels = MagicMock(return_value=[])
 
         writer.delete_repository_from_graph(str(tmp_path))
@@ -329,29 +347,47 @@ class TestPathConsistencyEndToEnd:
     def test_write_and_delete_use_same_path_format(self, tmp_path):
         writer, session = _make_writer()
 
-        # Capture the path written during add_repository_to_graph
-        written_paths = []
-        original_run = session.run
+        # Intercept driver.session() via the context manager instead of side_effect
+        captured_write_paths = []
 
-        def capturing_run(query, **kwargs):
+        def capture_write(original_session_run, query, **kwargs):
             if "path" in kwargs:
-                written_paths.append(kwargs["path"])
-            return original_run(query, **kwargs)
+                captured_write_paths.append(kwargs["path"])
+            return original_session_run(query, **kwargs)
 
-        session.run.side_effect = capturing_run
+        # Patch the writer's own session, not session.run's side_effect
+        original_session_run = session.run
+        session.run = lambda query, **kwargs: capture_write(original_session_run, query, **kwargs)
 
         writer.add_repository_to_graph(tmp_path)
-        assert written_paths, "No path was written to DB"
-        written_path = written_paths[0]
+        assert captured_write_paths, "No path was written to DB"
+        written_path = captured_write_paths[0]
 
-        # Now simulate delete — reset and check the queried path matches
-        written_paths.clear()
-        session.run.return_value.single.return_value = {"cnt": 1}
-        writer._get_all_node_labels = MagicMock(return_value=[])
-        writer.delete_repository_from_graph(str(tmp_path))
+        # Now simulate delete — set up properly scoped mocks
+        writer2, session2 = _make_writer()
+        delete_call_counter = iter([{"cnt": 1}])
+        def _delete_side_effect(*_a, **_kw):
+            try:
+                r = next(delete_call_counter)
+            except StopIteration:
+                r = {"deleted": 0}
+            return MagicMock(single=MagicMock(return_value=r))
+        session2.run.side_effect = _delete_side_effect
+        writer2._get_all_node_labels = MagicMock(return_value=[])
 
-        assert written_paths, "No path was queried during delete"
-        queried_path = written_paths[0]
+        captured_delete_paths = []
+        original_session_run2 = session2.run
+        session2.run = lambda query, **kwargs: (
+            captured_delete_paths.append(kwargs["path"]) or
+            original_session_run2(query, **kwargs)
+            if "path" in kwargs else
+            original_session_run2(query, **kwargs)
+        )
+
+        writer2.delete_repository_from_graph(str(tmp_path))
+
+        assert captured_delete_paths, "No path was queried during delete"
+        queried_path = captured_delete_paths[0]
 
         assert written_path == queried_path, (
             f"Path format mismatch between write and delete!\n"

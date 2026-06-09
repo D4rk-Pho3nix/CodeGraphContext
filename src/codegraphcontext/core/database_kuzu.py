@@ -317,6 +317,16 @@ class KuzuDBManager:
                     except Exception:
                         pass
                 self._pool = None
+                # Explicitly close the Database object — kuzu.Database has no
+                # __del__, so Python GC alone cannot release the C++ resources.
+                # Without this call the process hangs on exit because the
+                # embedded Kùzu engine keeps background threads alive.
+                try:
+                    if not self._db.is_closed():
+                        self._db.close()
+                        info_logger("KùzuDB database closed successfully")
+                except Exception as e:
+                    warning_logger(f"Error closing KùzuDB database: {e}")
                 self._db = None
                 gc.collect()
 

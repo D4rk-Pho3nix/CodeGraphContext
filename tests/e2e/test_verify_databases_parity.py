@@ -12,7 +12,7 @@ from typing import Tuple, Dict
 async def run_indexing_in_process(db_type: str, project_path: Path, temp_test_dir: Path) -> Tuple[float, Dict[str, int]]:
     print(f"\n================= RUNNING {db_type.upper()} INDEXING IN SUBPROCESS =================")
     
-    db_path = str(temp_test_dir / f"{db_type}_test_db")
+    db_path = (temp_test_dir / f"{db_type}_test_db").as_posix()
     
     # Pre-clean database directories to ensure no residual states
     if db_type != "neo4j":
@@ -30,7 +30,7 @@ async def run_indexing_in_process(db_type: str, project_path: Path, temp_test_di
             except OSError:
                 pass
     
-    project_path_str = str(project_path.resolve())
+    project_path_str = project_path.resolve().as_posix()
     
     # Construct a python command to run the indexing
     cmd = f"""
@@ -48,7 +48,7 @@ from pathlib import Path
 
 async def run():
     os.environ['CGC_RUNTIME_DB_TYPE'] = '{db_type}'
-    db_path = '{db_path}'
+    db_path = r'{db_path}'
     
     if '{db_type}' == 'neo4j':
         # Clear Neo4j
