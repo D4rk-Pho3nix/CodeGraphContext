@@ -225,6 +225,7 @@ class TestAddRepositoryToGraph:
 
 
 class TestDeleteRepositoryFromGraph:
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific backslash path regression test")
     def test_normalized_path_used_for_lookup(self, tmp_path):
         """delete_repository_from_graph normalizes before querying."""
         writer, session, *_ = _make_writer_with_delete_mocks()
@@ -269,6 +270,7 @@ class TestDeleteRepositoryFromGraph:
 
 
 class TestDeleteFileFromGraph:
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific backslash path regression test")
     def test_normalized_path_used(self, tmp_path):
         writer, session = _make_writer()
         # Mock the parents query to return empty

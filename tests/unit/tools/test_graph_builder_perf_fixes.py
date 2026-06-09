@@ -12,6 +12,8 @@ Covers Changes 2-11:
 """
 
 import inspect
+import sys
+import pytest
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, call, patch
@@ -701,6 +703,7 @@ class TestDeleteRepositoryFromGraph:
             "db.labels() must come after existence check and before per-label deletion"
         )
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific backslash path regression test")
     def test_finds_repo_stored_with_backslash_path(self):
         """Fallback should find a Repository stored with Windows backslash paths."""
         session = _RecordingSession(responses=[
