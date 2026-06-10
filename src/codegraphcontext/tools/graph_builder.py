@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple, TYPE_CHECKING
@@ -235,7 +236,7 @@ class GraphBuilder:
     def add_repository_to_graph(self, repo_path: Path, is_dependency: bool = False):
         """Adds a repository node using its absolute path as the unique key."""
         repo_name = repo_path.name
-        repo_path_str = str(repo_path.resolve())
+        repo_path_str = repo_path.resolve().as_posix()
         with self.driver.session() as session:
             session.run(
                 """
@@ -250,7 +251,7 @@ class GraphBuilder:
     # First pass to add file and its contents
     def add_file_to_graph(self, file_data: Dict, repo_name: str, imports_map: dict, repo_path_str: str = None):
         """Adds a file and its contents using batched UNWIND queries (one round-trip per node type)."""
-        file_path_str = str(Path(file_data['path']).resolve())
+        file_path_str = Path(file_data['path']).resolve().as_posix()
         file_name = Path(file_path_str).name
         is_dependency = file_data.get('is_dependency', False)
         lang = file_data.get('lang')
@@ -262,9 +263,9 @@ class GraphBuilder:
             else:
                 repo_result = session.run(
                     "MATCH (r:Repository {path: $repo_path}) RETURN r.path as path",
-                    repo_path=str(Path(file_data['repo_path']).resolve())
+                    repo_path=Path(file_data['repo_path']).resolve().as_posix()
                 ).single()
-                resolved_repo_str = repo_result['path'] if repo_result else str(Path(file_data['repo_path']).resolve())
+                resolved_repo_str = repo_result['path'] if repo_result else Path(file_data['repo_path']).resolve().as_posix()
                 if not repo_result:
                     warning_logger(f"Repository node not found for {file_data['repo_path']} during indexing of {file_name}.")
 
@@ -294,7 +295,7 @@ class GraphBuilder:
             parent_path = resolved_repo_str
             parent_label = 'Repository'
             for part in relative_path_to_file.parts[:-1]:
-                current_path_str = str(Path(parent_path) / part)
+                current_path_str = f"{parent_path}/{part}"  # keep forward-slash DB paths
                 session.run(f"""
                     MATCH (p:{parent_label} {{path: $parent_path}})
                     MERGE (d:Directory {{path: $current_path}})
@@ -559,7 +560,7 @@ class GraphBuilder:
         if file_class_lookup is None:
             file_class_lookup = {}
         for fd in all_file_data:
-            fp = str(Path(fd['path']).resolve())
+            fp = Path(fd['path']).resolve().as_posix()
             file_class_lookup[fp] = {c['name'] for c in fd.get('classes', [])}
         
         # Phase 1: Resolve all calls, categorized by (caller_label, called_label)
@@ -572,7 +573,7 @@ class GraphBuilder:
         file_to_cls = []  # File -> Class (needs init lookup)
         
         for idx, file_data in enumerate(all_file_data):
-            caller_file_path = str(Path(file_data['path']).resolve())
+            caller_file_path = Path(file_data['path']).resolve().as_posix()
             func_names = {f['name'] for f in file_data.get('functions', [])}
             class_names = {c['name'] for c in file_data.get('classes', [])}
             local_names = func_names | class_names
@@ -729,7 +730,7 @@ class GraphBuilder:
         if file_data.get('lang') != 'c_sharp':
             return
             
-        caller_file_path = str(Path(file_data['path']).resolve())
+        caller_file_path = Path(file_data['path']).resolve().as_posix()
         
         # Collect all local type names
         local_type_names = set()
@@ -863,7 +864,7 @@ class GraphBuilder:
         self._writer.delete_relationship_links(repo_path)
 
     def update_file_in_graph(self, path: Path, repo_path: Path, imports_map: dict):
-        file_path_str = str(path.resolve())
+        file_path_str = path.resolve().as_posix()
         repo_name = repo_path.name
 
         self.delete_file_from_graph(file_path_str)
@@ -1031,68 +1032,6 @@ class GraphBuilder:
                     job_id, status=status, end_time=datetime.now(), errors=[str(e)]
                 )
 
-    # Create a minimal File node for unsupported file types.
-    # These files do not contain parsed entities but should still
-    # appear in the repository graph as requested in issue #707.
-    def add_minimal_file_node(self, file_path: Path, repo_path: Path, is_dependency: bool = False):
-
-        file_path_str = str(file_path.resolve())
-        file_name = file_path.name
-        repo_name = repo_path.name
-        repo_path_str = str(repo_path.resolve())
-
-        with self.driver.session() as session:
-
-            session.run(
-                """
-                MERGE (r:Repository {path: $repo_path})
-                SET r.name = $repo_name
-                """,
-                repo_path=repo_path_str,
-                repo_name=repo_name
-            )
-
-            session.run(
-                """
-                MERGE (f:File {path: $file_path})
-                SET f.name = $file_name,
-                    f.is_dependency = $is_dependency
-                """,
-                file_path=file_path_str,
-                file_name=file_name,
-                is_dependency=is_dependency
-            )
-
-            # Establish directory structure
-            file_path_obj = Path(file_path_str).resolve()
-            repo_path_obj = Path(repo_path_str).resolve()
-            try:
-                relative_path_to_file = file_path_obj.relative_to(repo_path_obj)
-            except ValueError:
-                # Fallback if not relative
-                relative_path_to_file = Path(os.path.relpath(str(file_path_obj), str(repo_path_obj)))
-            
-            parent_path = repo_path_str
-            parent_label = 'Repository'
-
-            for part in relative_path_to_file.parts[:-1]:
-                current_path = Path(parent_path) / part
-                current_path_str = str(current_path)
-                
-                session.run(f"""
-                    MATCH (p:{parent_label} {{path: $parent_path}})
-                    MERGE (d:Directory {{path: $current_path}})
-                    SET d.name = $part
-                    MERGE (p)-[:CONTAINS]->(d)
-                """, parent_path=parent_path, current_path=current_path_str, part=part)
-
-                parent_path = current_path_str
-                parent_label = 'Directory'
-
-            session.run(f"""
-                MATCH (p:{parent_label} {{path: $parent_path}})
-                MATCH (f:File {{path: $file_path}})
-                MERGE (p)-[:CONTAINS]->(f)
-            """, parent_path=parent_path, file_path=file_path_str)
     def add_minimal_file_node(self, file_path: Path, repo_path: Path, is_dependency: bool = False) -> None:
+        """Delegate to GraphWriter for path-normalized minimal File node creation."""
         self._writer.add_minimal_file_node(file_path, repo_path, is_dependency)

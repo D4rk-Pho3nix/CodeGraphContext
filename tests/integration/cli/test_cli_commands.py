@@ -701,6 +701,8 @@ def test_load_credentials_displays_kuzudb_backend(monkeypatch, tmp_path):
 
 def test_load_credentials_normalizes_tilde_paths_from_mcp_json(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path))
+    if os.name == "nt":
+        monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cli_main.config_manager, "ensure_config_dir", lambda *_args, **_kwargs: None)
 

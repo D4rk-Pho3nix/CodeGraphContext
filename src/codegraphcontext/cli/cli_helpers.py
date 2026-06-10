@@ -260,6 +260,10 @@ def index_helper(path: str, context: Optional[str] = None):
     """Synchronously indexes a repository in a given context."""
     time_start = time.time()
     path_obj = Path(path).resolve()
+    # Normalize to forward slashes for cross-platform DB consistency.
+    # The graph DB always stores paths via Path.resolve().as_posix(),
+    # so Cypher queries must also use forward slashes on Windows.
+    repo_path_str = path_obj.as_posix()
     index_cwd = path_obj if path_obj.is_dir() else path_obj.parent
     services = _initialize_services(context, cwd=index_cwd)
     if not all(services[:3]):
@@ -283,7 +287,7 @@ def index_helper(path: str, context: Optional[str] = None):
             with db_manager.get_driver().session() as session:
                 result = session.run(
                     "MATCH (r:Repository {path: $path})-[:CONTAINS*]->(f:File) RETURN count(DISTINCT f) as file_count",
-                    path=str(path_obj)
+                    path=repo_path_str
                 )
                 record = result.single()
                 file_count = record["file_count"] if record else 0

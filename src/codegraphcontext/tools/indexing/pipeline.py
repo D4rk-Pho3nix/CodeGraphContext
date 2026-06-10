@@ -49,7 +49,7 @@ async def run_tree_sitter_index_async(
     debug_log(f"Pre-scan complete. Found {len(imports_map)} definitions.")
 
     all_file_data: List[Dict[str, Any]] = []
-    resolved_repo_path_str = str(path.resolve()) if path.is_dir() else str(path.parent.resolve())
+    resolved_repo_path_str = path.resolve().as_posix() if path.is_dir() else path.parent.resolve().as_posix()
 
     processed_count = 0
     concurrency_limit = 10
@@ -220,7 +220,7 @@ async def run_tree_sitter_index_async(
             job_manager.update_job(job_id, status_message="Generating embeddings...")
         try:
             from .embeddings import EmbeddingPipeline
-            repo_path_str = str(path.resolve())
+            repo_path_str = path.resolve().as_posix()
             info_logger("[EMBED] Starting embedding pipeline...")
             EmbeddingPipeline(writer.driver).run(repo_path_str)
             info_logger("[EMBED] Embedding pipeline complete.")
@@ -240,7 +240,7 @@ async def run_tree_sitter_index_async(
                     vector_resolver = VectorResolver(writer.driver)
                 except Exception as _ve:
                     info_logger(f"[VECTOR] Resolver unavailable: {_ve}")
-            repo_path_str = str(path.resolve())
+            repo_path_str = path.resolve().as_posix()
             improved = run_inheritance_reresolve(writer.driver, repo_path_str, vector_resolver)
             info_logger(f"[INHERIT-RESOLVE] Post-resolution complete: {improved} edges improved")
         except Exception as _ie:

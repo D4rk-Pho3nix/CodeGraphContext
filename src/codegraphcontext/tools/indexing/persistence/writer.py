@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -163,7 +164,7 @@ class GraphWriter:
 
         with self.driver.session() as session:
             if repo_path_str:
-                resolved_repo_str = repo_path_str
+                resolved_repo_str = _normalize_path(repo_path_str)
             else:
                 repo_result = session.run(
                     "MATCH (r:Repository {path: $repo_path}) RETURN r.path as path",
@@ -1351,9 +1352,36 @@ class GraphWriter:
                 "MATCH (r:Repository {path: $path}) RETURN count(r) as cnt",
                 path=repo_path_str,
             ).single()
-            if not result or result["cnt"] == 0:
-                warning_logger(f"Attempted to delete non-existent repository: {repo_path}")
-                return False
+            found = result and result["cnt"] > 0
+
+        # Backward-compat: old CGC versions stored Windows paths with
+        # backslashes (str(Path.resolve()) instead of as_posix()).  If the
+        # normalized (forward-slash) lookup missed, try the native variant
+        # so users can clean up stale entries via `cgc delete`.
+        legacy_path_str: str | None = None
+        if not found:
+            native = str(Path(repo_path).resolve())
+            if native != repo_path_str:
+                legacy_path_str = native
+                with self.driver.session() as session:
+                    result = session.run(
+                        "MATCH (r:Repository {path: $path}) RETURN count(r) as cnt",
+                        path=legacy_path_str,
+                    ).single()
+                    if result and result["cnt"] > 0:
+                        found = True
+                        info_logger(
+                            f"[DELETE] Found legacy backslash repo entry: {legacy_path_str}"
+                        )
+                        # Swap to legacy paths for the deletion queries.
+                        # Old data used native separators, so the prefix
+                        # must also use native separators (backslash on Win).
+                        repo_path_str = legacy_path_str
+                        path_prefix = legacy_path_str + os.sep
+
+        if not found:
+            warning_logger(f"Attempted to delete non-existent repository: {repo_path}")
+            return False
 
         for rel_type in ("CALLS", "INHERITS", "IMPORTS", "INCLUDES"):
             while True:

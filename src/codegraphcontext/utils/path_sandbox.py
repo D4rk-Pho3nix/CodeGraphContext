@@ -63,7 +63,8 @@ def sanitize_bundle_filename(filename: str, default: str = "bundle.cgc") -> str:
         return default
     if not re.fullmatch(r"[\w.\-]+\.cgc", name, flags=re.IGNORECASE):
         if not name.endswith(".cgc"):
-            name = f"{re.sub(r'[^\w.\-]+', '_', name)}.cgc"
+            sanitized = re.sub(r'[^\w.\-]+', '_', name)
+            name = f"{sanitized}.cgc"
     return name
 
 

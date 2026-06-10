@@ -12,6 +12,8 @@ Covers Changes 2-11:
 """
 
 import inspect
+import sys
+import pytest
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from unittest.mock import MagicMock, call, patch
@@ -381,7 +383,7 @@ class TestCreateAllFunctionCallsV3:
         with patch("codegraphcontext.tools.indexing.resolution.calls.get_config_value",
                    return_value="false"):
             gb._create_all_function_calls(file_data, {}, external_lookup)
-        resolved_b = str(Path("/repo/b.py").resolve())
+        resolved_b = Path("/repo/b.py").resolve().as_posix()
         assert resolved_b in external_lookup
         assert "MyClass" in external_lookup[resolved_b]
 
@@ -717,6 +719,7 @@ class TestDeleteRepositoryFromGraph:
             "db.labels() must come after existence check and before per-label deletion"
         )
 
+    @pytest.mark.skipif(sys.platform != "win32", reason="Windows-specific backslash path regression test")
     def test_finds_repo_stored_with_backslash_path(self):
         """Fallback should find a Repository stored with Windows backslash paths."""
         session = _RecordingSession(responses=[

@@ -150,7 +150,7 @@ class RepositoryEventHandler(FileSystemEventHandler):
         
         # 3. Persist parsed nodes, then create cross-file relationships.
         repo_name = self.repo_path.name
-        repo_path_str = str(self.repo_path.resolve())
+        repo_path_str = self.repo_path.resolve().as_posix()
         self.graph_builder.add_repository_to_graph(self.repo_path, is_dependency=False)
         for file_data in self.all_file_data:
             self.graph_builder.add_file_to_graph(
@@ -228,7 +228,7 @@ class RepositoryEventHandler(FileSystemEventHandler):
             debug_log(f"Ignored watcher update based on .cgcignore: {changed_path}")
             return
 
-        changed_path_str = str(changed_path.resolve())
+        changed_path_str = changed_path.resolve().as_posix()
         supported_extensions = self.graph_builder.parsers.keys()
 
         # Step 1: Find affected neighbours BEFORE nodes are destroyed.
