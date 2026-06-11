@@ -30,6 +30,12 @@ services:
   # Separate FalkorDB container (recommended for aarch64 or larger projects)
   falkordb:
     image: falkordb/falkordb:latest
+    healthcheck:
+      test: [ "CMD", "redis-cli", "PING" ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
     container_name: cgc-falkordb
     ports:
       - "6379:6379"
@@ -43,6 +49,16 @@ services:
   # Optional: Neo4j database (if you prefer Neo4j over FalkorDB)
   neo4j:
     image: neo4j:5.15.0
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "cypher-shell -u neo4j -p codegraph123 'RETURN 1' || exit 1"
+        ]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     container_name: cgc-neo4j
     ports:
       - "7474:7474"  # HTTP
