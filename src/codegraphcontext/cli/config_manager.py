@@ -62,6 +62,8 @@ DEFAULT_CONFIG = {
     "SKIP_EXTERNAL_RESOLUTION": "false",
     # 0 = unlimited; any positive integer caps MCP tool response size.
     "MAX_TOOL_RESPONSE_TOKENS": "0",
+    # 0 = unlimited; any positive integer caps MCP tool response size in characters.
+    "MAX_PROMPT_CHARS": "0",
     # JSON object mapping tool names to integer result-count limits.
     # Example: {"find_code": 20, "analyze_code_relationships": 10, "find_dead_code": 30}
     "TOOL_RESULT_LIMITS": "{}",
@@ -102,6 +104,7 @@ CONFIG_DESCRIPTIONS = {
     "SCIP_LANGUAGES": "Comma-separated languages to index via SCIP when SCIP_INDEXER=true (python,typescript,javascript,go,rust,java,dart,cpp,c,csharp)",
     "SKIP_EXTERNAL_RESOLUTION": "Skip resolution attempts for external library method calls (recommended for enterprise large Java/Spring codebases)",
     "MAX_TOOL_RESPONSE_TOKENS": "Maximum tokens per MCP tool response (0 = unlimited). Truncates oversized payloads and appends a notice.",
+    "MAX_PROMPT_CHARS": "Maximum characters per MCP tool response (0 = unlimited). Stricter of MAX_PROMPT_CHARS and MAX_TOOL_RESPONSE_TOKENS is applied.",
     "TOOL_RESULT_LIMITS": "JSON object mapping tool names to max result counts, e.g. {\"find_code\": 20, \"analyze_code_relationships\": 10}. Missing keys use built-in defaults.",
     # Post-indexing resolution phases
     "ENABLE_INHERIT_RESOLVE": (
@@ -469,6 +472,14 @@ def validate_config_value(key: str, value: str) -> tuple[bool, Optional[str]]:
                 return False, "MAX_TOOL_RESPONSE_TOKENS must be 0 (unlimited) or a positive integer"
         except ValueError:
             return False, "MAX_TOOL_RESPONSE_TOKENS must be an integer (0 = unlimited)"
+
+    if key == "MAX_PROMPT_CHARS":
+        try:
+            limit = int(value)
+            if limit < 0:
+                return False, "MAX_PROMPT_CHARS must be 0 (unlimited) or a positive integer"
+        except ValueError:
+            return False, "MAX_PROMPT_CHARS must be an integer (0 = unlimited)"
 
     if key == "TOOL_RESULT_LIMITS":
         import json as _json

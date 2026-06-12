@@ -92,28 +92,49 @@ _CHARS_PER_TOKEN = 4
 
 
 def _apply_response_token_limit(tool_name: str, text: str) -> str:
-    """Truncate *text* to the configured token budget and append a notice.
-
-    Reads ``MAX_TOOL_RESPONSE_TOKENS`` from the CGC config at call time so
-    that live config changes are respected without a server restart.
-    Returns *text* unchanged when the limit is 0 (unlimited) or not set.
-    """
+    # Truncate *text* to the configured budget and append a notice.
+    # Reads MAX_TOOL_RESPONSE_TOKENS (token-based) and MAX_PROMPT_CHARS
+    # (character-based) from the CGC config at call time, so live config
+    # changes take effect without a server restart. Applies the stricter
+    # of the two active limits. Returns *text* unchanged when both limits
+    # are 0 (unlimited) or not set. Warns to stderr whenever truncation fires.
+    import sys
     from .cli.config_manager import get_config_value
 
-    raw = get_config_value("MAX_TOOL_RESPONSE_TOKENS") or "0"
+    raw_tokens = get_config_value("MAX_TOOL_RESPONSE_TOKENS") or "0"
     try:
-        max_tokens = int(raw)
+        max_tokens = int(raw_tokens)
     except ValueError:
         max_tokens = 0
 
-    if max_tokens <= 0:
-        return text  # unlimited
+    raw_chars = get_config_value("MAX_PROMPT_CHARS") or "0"
+    try:
+        max_prompt_chars = int(raw_chars)
+    except ValueError:
+        max_prompt_chars = 0
 
-    max_chars = max_tokens * _CHARS_PER_TOKEN
+    # Convert token limit to characters; 0 means "not set" for that limit.
+    token_limit_chars = max_tokens * _CHARS_PER_TOKEN if max_tokens > 0 else 0
+
+    # Pick the stricter (smaller) active limit; ignore limits that are 0.
+    active_limits = [lim for lim in (token_limit_chars, max_prompt_chars) if lim > 0]
+    if not active_limits:
+        return text  # both unlimited
+
+    max_chars = min(active_limits)
     if len(text) <= max_chars:
         return text
 
+    # Build a human-readable description of which limit(s) triggered.
+    limit_parts = []
+    if max_tokens > 0:
+        limit_parts.append(f"MAX_TOOL_RESPONSE_TOKENS={max_tokens}")
+    if max_prompt_chars > 0:
+        limit_parts.append(f"MAX_PROMPT_CHARS={max_prompt_chars}")
+    limit_desc = ", ".join(limit_parts)
+
     notice = (
+<<<<<<< Updated upstream
         f"Response truncated: output exceeded MAX_TOOL_RESPONSE_TOKENS "
         f"({max_tokens} tokens) for tool '{tool_name}'. "
         "Increase the limit or narrow your query for full results."
@@ -133,6 +154,26 @@ def _apply_response_token_limit(tool_name: str, text: str) -> str:
             {"truncated": True, "preview": text[:budget], "notice": notice},
             indent=2,
         )
+=======
+        f"\n\n[CGC] Response truncated: output exceeded the configured limit "
+        f"({limit_desc}) for tool '{tool_name}'. "
+        "Increase the limit or narrow your query for full results."
+    )
+    # Reserve space for the notice inside the budget.
+    budget = max_chars - len(notice)
+    if budget < 0:
+        budget = 0
+    truncated = text[:budget] + notice
+
+    print(
+        f"[CGC WARNING] Response for tool '{tool_name}' truncated: "
+        f"original={len(text)} chars, truncated={len(truncated)} chars "
+        f"(limit: {limit_desc})",
+        file=sys.stderr,
+        flush=True,
+    )
+    return truncated
+>>>>>>> Stashed changes
 
 
 class MCPServer:
