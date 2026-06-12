@@ -72,6 +72,9 @@ DEFAULT_CONFIG = {
     "CGC_EMBEDDING_BATCH_SIZE": "256",
     # Default fuzzy matching behavior for `cgc find name` (overridable per-command with --fuzzy/--no-fuzzy)
     "FUZZY_SEARCH": "true",
+    # Default LLM model names used for graph queries when no value is explicitly configured
+    "OPENAI_MODEL": "gpt-4o",
+    "ANTHROPIC_MODEL": "claude-3-5-sonnet-20241022",
 }
 
 # Configuration key descriptions
@@ -138,6 +141,16 @@ CONFIG_DESCRIPTIONS = {
         "Enable fuzzy matching by default for `cgc find name` (true|false). "
         "Per-invocation overrides are available via --fuzzy / --no-fuzzy."
     ),
+    "OPENAI_MODEL": (
+        "Default OpenAI model used for graph queries. "
+        "Requires OPENAI_API_KEY environment variable. "
+        "Default: gpt-4o"
+    ),
+    "ANTHROPIC_MODEL": (
+        "Default Anthropic model used for graph queries. "
+        "Requires ANTHROPIC_API_KEY environment variable. "
+        "Default: claude-3-5-sonnet-20241022"
+    ),
 }
 
 # Valid values for each config key
@@ -195,6 +208,25 @@ __pycache__/
 coverage/
 .next/
 """
+
+
+def resolve_model_name(provider: str, configured_value: Optional[str] = None) -> str:
+    """Get the model it should use for an LLM provider.
+
+    If the user configured a model, it uses that. Otherwise, it falls back to the default
+    model for the provider (like OPENAI_MODEL or ANTHROPIC_MODEL).
+
+    Args:
+        provider: The name of the provider, like "openai" or "anthropic" (case-insensitive).
+        configured_value: The model name from the user's config, if they set one.
+
+    Returns:
+        The model name it should use, or an empty string if it doesn't know the provider.
+    """
+    if configured_value and configured_value.strip():
+        return configured_value.strip()
+    key = f"{provider.upper()}_MODEL"
+    return DEFAULT_CONFIG.get(key, "")
 
 
 def normalize_config_path(value: str, *, absolute: bool = False, base_dir: Optional[Path] = None) -> str:
