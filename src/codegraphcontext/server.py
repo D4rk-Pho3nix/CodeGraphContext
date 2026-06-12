@@ -134,7 +134,6 @@ def _apply_response_token_limit(tool_name: str, text: str) -> str:
     limit_desc = ", ".join(limit_parts)
 
     notice = (
-<<<<<<< Updated upstream
         f"Response truncated: output exceeded MAX_TOOL_RESPONSE_TOKENS "
         f"({max_tokens} tokens) for tool '{tool_name}'. "
         "Increase the limit or narrow your query for full results."
@@ -154,26 +153,6 @@ def _apply_response_token_limit(tool_name: str, text: str) -> str:
             {"truncated": True, "preview": text[:budget], "notice": notice},
             indent=2,
         )
-=======
-        f"\n\n[CGC] Response truncated: output exceeded the configured limit "
-        f"({limit_desc}) for tool '{tool_name}'. "
-        "Increase the limit or narrow your query for full results."
-    )
-    # Reserve space for the notice inside the budget.
-    budget = max_chars - len(notice)
-    if budget < 0:
-        budget = 0
-    truncated = text[:budget] + notice
-
-    print(
-        f"[CGC WARNING] Response for tool '{tool_name}' truncated: "
-        f"original={len(text)} chars, truncated={len(truncated)} chars "
-        f"(limit: {limit_desc})",
-        file=sys.stderr,
-        flush=True,
-    )
-    return truncated
->>>>>>> Stashed changes
 
 
 class MCPServer:
